@@ -1,0 +1,20 @@
+info:
+  name: " Skapa en wiki"
+  type: http
+  seq: 4
+
+http:
+  method: POST
+  url: http://localhost/api/wiki/pages.php?session_key=DIN_NYCKEL
+  params:
+    - name: session_key
+      value: DIN_NYCKEL
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

@@ -1,0 +1,23 @@
+info:
+  name: Redigera en wiki
+  type: http
+  seq: 5
+
+http:
+  method: PUT
+  url: http://localhost/api/wiki/pages.php?id=1&session_key=DIN_NYCKEL
+  params:
+    - name: id
+      value: "1"
+      type: query
+    - name: session_key
+      value: DIN_NYCKEL
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

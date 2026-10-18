@@ -5,7 +5,7 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Events: getEvents, createNewEvent, editEvent
+// Events:
 // getEvents
 // createNewEvent
 // editEvent

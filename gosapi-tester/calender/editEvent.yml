@@ -1,11 +1,15 @@
 info:
   name: editEvent
   type: http
-  seq: 4
+  seq: 5
 
 http:
-  method: POST
-  url: ""
+  method: PUT
+  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  params:
+    - name: action
+      value: ""
+      type: query
   auth: inherit
 
 settings:

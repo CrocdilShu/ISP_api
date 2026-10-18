@@ -1,11 +1,18 @@
 info:
   name: createNewEvent
   type: http
-  seq: 3
+  seq: 4
 
 http:
   method: POST
-  url: ""
+  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  params:
+    - name: action
+      value: ""
+      type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

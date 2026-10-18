@@ -5,7 +5,7 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Participants: getParticipants, addParticipants, editParticipants
+// Participants:
 // getParticipants
 // addParticipants
 // editParticipants

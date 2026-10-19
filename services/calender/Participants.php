@@ -20,9 +20,9 @@ function getParticipants(mysqli $conn): void {
     $rows = fetchAll(
         $conn,
         'SELECT p.ID AS participant_id, u.ID AS user_id, u.username, u.pfp_file
-         FROM participant p
-         LEFT JOIN user u ON u.ID = p.FORuser
-         WHERE p.FORcalender_event = ?',
+        FROM participant p
+        LEFT JOIN user u ON u.ID = p.FORuser
+        WHERE p.FORcalender_event = ?',
         [$eventId]
     );
     respond(200, ['participants' => $rows]);

@@ -1,11 +1,14 @@
 <?php
-define('CALENDER_API', true);   // lets the part files know they are loaded through this file
+define('USER_API', true);   // lets the part files know they are loaded through this file
 
-require_once __DIR__ . '/../config/db.php';
-require_once __DIR__ . '/../config/providerauth.php';
+require_once __DIR__ . '/../../config/db.php';
+require_once __DIR__ . '/../../config/providerauth.php';
+
+// Shared helpers
+require_once __DIR__ . '/../calender/helpers.php';
 
 // User files that contains the funcs
-require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/userfuncs.php';
 
 header('Content-Type: application/json; charset=utf-8');
 

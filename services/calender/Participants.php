@@ -5,14 +5,10 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Participants:
-// getParticipants
-// addParticipants
-// editParticipants
+// Participants: getParticipants, addParticipants, editParticipants
 
 // ---------------------------------------------------------------
-// GET getParticipants
-// ?user_id=x (returns specific user)
+// GET getParticipants  ?event_id=1
 // ---------------------------------------------------------------
 function getParticipants(mysqli $conn): void {
     requireMethod('GET');
@@ -24,9 +20,9 @@ function getParticipants(mysqli $conn): void {
     $rows = fetchAll(
         $conn,
         'SELECT p.ID AS participant_id, u.ID AS user_id, u.username, u.pfp_file
-            FROM participant p
-            LEFT JOIN user u ON u.ID = p.FORuser
-            WHERE p.FORcalender_event = ?',
+         FROM participant p
+         LEFT JOIN user u ON u.ID = p.FORuser
+         WHERE p.FORcalender_event = ?',
         [$eventId]
     );
     respond(200, ['participants' => $rows]);
@@ -34,7 +30,7 @@ function getParticipants(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // POST addParticipants
-// body: {"user_id":x, "event_id":x, "user_ids":[x,x]}
+// body: {"user_id":5, "event_id":1, "user_ids":[4,6]}   (user_id = owner making the call)
 // ---------------------------------------------------------------
 function addParticipants(mysqli $conn): void {
     requireMethod('POST');
@@ -52,7 +48,7 @@ function addParticipants(mysqli $conn): void {
     try {
         $conn->begin_transaction();
         foreach ($userIds as $id) {
-            if (isParticipant($conn, $eventId, $id)) continue; // skips duplicates
+            if (isParticipant($conn, $eventId, $id)) continue; // skip duplicates
             run($conn, 'INSERT INTO participant (FORcalender_event, FORuser) VALUES (?, ?)', [$eventId, $id]);
             $added[] = $id;
         }
@@ -66,12 +62,12 @@ function addParticipants(mysqli $conn): void {
 }
 
 // ---------------------------------------------------------------
-// POST editParticipants
-// body: {"user_id":x, "event_id":x, "user_ids":[x,x,x]}
+// PUT editParticipants (POST also accepted)
+// body: {"user_id":5, "event_id":1, "user_ids":[2,3,6]}
 // replaces the whole participant list with user_ids (the owner always stays).
 // ---------------------------------------------------------------
 function editParticipants(mysqli $conn): void {
-    requireMethod('POST');
+    requireMethod('PUT', 'POST');
     $body = getBody();
 
     $eventId = (int)($body['event_id'] ?? 0);
@@ -80,7 +76,7 @@ function editParticipants(mysqli $conn): void {
     }
     $ownerId = requireOwner($conn, $eventId);
 
-    // Owner of event allways stay in the list
+    // the owner always stays on the list
     $wanted = cleanUserIds(array_merge([$ownerId], $body['user_ids']));
     requireUsersExist($conn, $wanted);
 
@@ -88,7 +84,7 @@ function editParticipants(mysqli $conn): void {
         $conn->begin_transaction();
 
         if ($wanted) {
-            // Removes all the participants that isnt in the new list
+            // remove everyone not in the new list
             $in = implode(',', array_fill(0, count($wanted), '?'));
             run(
                 $conn,
@@ -99,7 +95,7 @@ function editParticipants(mysqli $conn): void {
             run($conn, 'DELETE FROM participant WHERE FORcalender_event = ?', [$eventId]);
         }
 
-        // add the new participants
+        // add the missing ones
         foreach ($wanted as $id) {
             if (!isParticipant($conn, $eventId, $id)) {
                 run($conn, 'INSERT INTO participant (FORcalender_event, FORuser) VALUES (?, ?)', [$eventId, $id]);

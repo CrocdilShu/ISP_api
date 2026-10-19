@@ -5,13 +5,15 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Suggestions:
-// getSuggestions
-// addSuggestions
-// editSuggestions
-// deleteSuggestions
+// Suggestions: getSuggestions, addSuggestion, editSuggestion, deleteSuggestion
 
-// stops unless the employee is a participant of the event (the owneris always one); returns their id
+// ---------------------------------------------------------------
+// Stored in the `comment` table: FORpage = event id (the event shares the
+// page's id), FORuser = author, content = {"text": "..."} as JSON.
+// ---------------------------------------------------------------
+
+// stops unless the acting employee is a participant of the event (the owner
+// is always one); returns their id
 function requireParticipant(mysqli $conn, int $eventId): int {
     $actingId = requireActingUser($conn);
     if (!eventExists($conn, $eventId)) respond(404, ['error' => 'event not found']);
@@ -30,14 +32,14 @@ function cleanSuggestionText($raw): string {
     return $text;
 }
 
-// Loads suggestion or else give 400 or 404
+// loads a suggestion that belongs to an event, or stops with 400/404
 function loadSuggestion(mysqli $conn, int $suggestionId): array {
     if ($suggestionId <= 0) respond(400, ['error' => 'suggestion_id is required']);
     $row = fetchOne(
         $conn,
         'SELECT c.ID, c.FORuser, c.FORpage
-            FROM comment c JOIN calender_event e ON e.ID = c.FORpage
-            WHERE c.ID = ?',
+        FROM comment c JOIN calender_event e ON e.ID = c.FORpage
+        WHERE c.ID = ?',
         [$suggestionId]
     );
     if (!$row) respond(404, ['error' => 'suggestion not found']);
@@ -45,7 +47,7 @@ function loadSuggestion(mysqli $conn, int $suggestionId): array {
 }
 
 // ---------------------------------------------------------------
-// GET getSuggestions  ?event_id=x
+// GET getSuggestions  ?event_id=1
 // oldest first
 // ---------------------------------------------------------------
 function getSuggestions(mysqli $conn): void {
@@ -58,7 +60,7 @@ function getSuggestions(mysqli $conn): void {
     $rows = fetchAll(
         $conn,
         'SELECT c.ID AS suggestion_id, c.content, c.created_at, c.last_update,
-            c.FORuser AS user_id, u.username, u.pfp_file
+                c.FORuser AS user_id, u.username, u.pfp_file
         FROM comment c
         LEFT JOIN user u ON u.ID = c.FORuser
         WHERE c.FORpage = ?
@@ -77,8 +79,8 @@ function getSuggestions(mysqli $conn): void {
 }
 
 // ---------------------------------------------------------------
-// POST addSuggestion   (participants only)
-// body: {"user_id":x, "event_id":x, "text":"xxxxx xx xxxxxx xxxxx xx:xx?"}
+// POST createSuggestion (the old name addSuggestion also works)   (participants only)
+// body: {"user_id":4, "event_id":1, "text":"Can we move it to 11:00?"}
 // ---------------------------------------------------------------
 function addSuggestion(mysqli $conn): void {
     requireMethod('POST');
@@ -98,11 +100,11 @@ function addSuggestion(mysqli $conn): void {
 }
 
 // ---------------------------------------------------------------
-// POST editSuggestion   (the author only, yet needs to be a participant)
-// body: {"user_id":x, "suggestion_id":x, "text":"New text"}
+// PUT editSuggestion (POST also accepted)   (the author only, and they must still be a participant)
+// body: {"user_id":4, "suggestion_id":9, "text":"New text"}
 // ---------------------------------------------------------------
 function editSuggestion(mysqli $conn): void {
-    requireMethod('POST');
+    requireMethod('PUT', 'POST');
     $body = getBody();
 
     $suggestion = loadSuggestion($conn, (int)($body['suggestion_id'] ?? 0));
@@ -121,14 +123,15 @@ function editSuggestion(mysqli $conn): void {
 }
 
 // ---------------------------------------------------------------
-// POST deleteSuggestion   (the author, or the owner of the event)
-// body: {"user_id":x, "suggestion_id":x}
+// DELETE deleteSuggestion (POST also accepted)
+// suggestion_id can be sent in the URL or in the body   (the author, or the owner of the event)
+// body: {"user_id":4, "suggestion_id":9}
 // ---------------------------------------------------------------
 function deleteSuggestion(mysqli $conn): void {
-    requireMethod('POST');
+    requireMethod('DELETE', 'POST');
     $body = getBody();
 
-    $suggestion = loadSuggestion($conn, (int)($body['suggestion_id'] ?? 0));
+    $suggestion = loadSuggestion($conn, (int)($body['suggestion_id'] ?? $_GET['suggestion_id'] ?? 0));
     $actingId = requireActingUser($conn);
 
     $page = fetchOne($conn, 'SELECT FORuser FROM page WHERE ID = ?', [(int)$suggestion['FORpage']]);

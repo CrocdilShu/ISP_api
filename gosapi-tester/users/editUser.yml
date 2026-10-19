@@ -1,10 +1,10 @@
 info:
-  name: getbloggpages
+  name: editUser
   type: http
-  seq: 1
+  seq: 2
 
 http:
-  method: GET
+  method: PUT
   url: ""
   auth: inherit
 

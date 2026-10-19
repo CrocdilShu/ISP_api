@@ -5,11 +5,11 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Values for the requrrence 
+// allowed values for recurrence.frequency (change to whatever you want to support)
 const ALLOWED_FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly'];
 
 // ---------------------------------------------------------------
-// Helpers
+// helpers
 // ---------------------------------------------------------------
 function respond(int $code, array $data): void {
     http_response_code($code);
@@ -17,9 +17,10 @@ function respond(int $code, array $data): void {
     exit;
 }
 
-function requireMethod(string $method): void {
-    if ($_SERVER['REQUEST_METHOD'] !== $method) {
-        respond(405, ['error' => "use $method"]);
+// stops with 405 unless the request uses one of the given HTTP methods
+function requireMethod(string ...$methods): void {
+    if (!in_array($_SERVER['REQUEST_METHOD'], $methods, true)) {
+        respond(405, ['error' => 'use ' . implode(' or ', $methods)]);
     }
 }
 
@@ -70,16 +71,16 @@ function isParticipant(mysqli $conn, int $eventId, int $userId): bool {
     ) !== null;
 }
 
-// Get what user is making the call
-function callingUserId(): int {
+// the employee making the request (sent by the caller, see top of file)
+function actingUserId(): int {
     if (!empty($_SERVER['HTTP_X_USER_ID'])) return (int)$_SERVER['HTTP_X_USER_ID'];
     if (!empty($_GET['user_id'])) return (int)$_GET['user_id'];
     $body = getBody();
     return (int)($body['user_id'] ?? 0);
 }
 
-function requireCallingUser(mysqli $conn): int {
-    $id = callingUserId();
+function requireActingUser(mysqli $conn): int {
+    $id = actingUserId();
     if ($id <= 0) respond(400, ['error' => 'user_id (the employee making the request) is required']);
     if (!fetchOne($conn, 'SELECT 1 FROM user WHERE ID = ?', [$id])) {
         respond(400, ['error' => 'unknown user_id']);
@@ -87,14 +88,14 @@ function requireCallingUser(mysqli $conn): int {
     return $id;
 }
 
-// Requires the owner of events and if not return as an 404 or 403
+// stops with 404/403 unless the acting employee owns the event; returns their id
 function requireOwner(mysqli $conn, int $eventId): int {
-    $actingId = requireCallingUser($conn);
+    $actingId = requireActingUser($conn);
     $event = fetchOne(
         $conn,
         'SELECT pg.FORuser AS owner_id
-            FROM calender_event e JOIN page pg ON pg.ID = e.ID
-            WHERE e.ID = ?',
+        FROM calender_event e JOIN page pg ON pg.ID = e.ID
+        WHERE e.ID = ?',
         [$eventId]
     );
     if (!$event) respond(404, ['error' => 'event not found']);
@@ -104,14 +105,14 @@ function requireOwner(mysqli $conn, int $eventId): int {
     return $actingId;
 }
 
-// Makes a clean list of the callers input and removed duplicates so a user cant get added twice
+// cleans a list of employee IDs (ints, unique, > 0) and checks that every one
+// exists in the user table. Stops with 400 and the unknown IDs if not.
 function cleanUserIds($raw): array {
     if (!is_array($raw)) return [];
     $ids = array_values(array_unique(array_filter(array_map('intval', $raw), fn($i) => $i > 0)));
     return $ids;
 }
 
-// Func to see if the user exsists
 function requireUsersExist(mysqli $conn, array $ids): void {
     if (!$ids) return;
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -122,7 +123,9 @@ function requireUsersExist(mysqli $conn, array $ids): void {
     }
 }
 
-// Validator for requrremce alternatives 
+// validates a recurrence object from the request
+// {"frequency":"weekly","interval_step":1,"end_date":"2026-12-31 23:59:59"}
+// returns [frequency, interval_step, end_date] or stops with a 400 error
 function validateRecurrence(array $rec): array {
     $frequency = strtolower(trim((string)($rec['frequency'] ?? '')));
     if (!in_array($frequency, ALLOWED_FREQUENCIES, true)) {
@@ -145,13 +148,13 @@ function insertRecurrence(mysqli $conn, array $validated): int {
     return $conn->insert_id;
 }
 
-// Requerrence cleanup
+// delete a recurrence row if no event uses it anymore
 function cleanupRecurrence(mysqli $conn, ?int $recurrenceId): void {
     if (!$recurrenceId) return;
     run(
         $conn,
         'DELETE FROM recurrence WHERE ID = ?
-            AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
+        AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
         [$recurrenceId, $recurrenceId]
     );
 }

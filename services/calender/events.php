@@ -5,18 +5,15 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Events:
-// getEvents
-// createNewEvent
-// editEvent
-
+// Events: getEvents, createNewEvent, editEvent
 
 // ---------------------------------------------------------------
 // GET getEvents
-// optional: ?from=&to=(Y-m-d H:i:s)
-// ?user_id=x (events the ID is an participant of)
+// optional: ?from=...&to=...  (Y-m-d H:i:s)
+//           ?user_id=5        (only events that employee takes part in)
 // returns ALL events of the company unless user_id is given.
 // Repeating events are returned ONCE (first occurrence + rule),
+// the client expands the repeats.
 // ---------------------------------------------------------------
 function getEvents(mysqli $conn): void {
     requireMethod('GET');
@@ -34,10 +31,11 @@ function getEvents(mysqli $conn): void {
 
     if (!empty($_GET['user_id'])) {
         $sql .= ' AND EXISTS (SELECT 1 FROM participant p
-            WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
+                WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
         $params[] = (int)$_GET['user_id'];
     }
     if (!empty($_GET['from']) && validDate($_GET['from'])) {
+        // repeating events stay relevant until their rule ends
         $sql .= ' AND (e.end_time >= ? OR (r.ID IS NOT NULL AND (r.end_date IS NULL OR r.end_date >= ?)))';
         $params[] = $_GET['from'];
         $params[] = $_GET['from'];
@@ -50,7 +48,7 @@ function getEvents(mysqli $conn): void {
 
     $events = fetchAll($conn, $sql, $params);
     foreach ($events as &$ev) {
-        // Return in JSON to match database data type
+        // page.content is a JSON column: return it as real JSON, not as a string
         $ev['content'] = $ev['content'] !== null ? json_decode($ev['content'], true) : null;
     }
     unset($ev);
@@ -61,15 +59,16 @@ function getEvents(mysqli $conn): void {
 // ---------------------------------------------------------------
 // POST createNewEvent
 // body: {
-//   "user_id": ,                       (employee creating it = the owner, required)
-//   "title": "",                       (required, max 255 characters)
-//   "content": {},                     (optional, any JSON, stored in page.content)
-//   "start_time": "YYYY-MM-DD HH:MM:SS",
-//   "end_time": "YYYY-MM-DD HH:MM:SS",
-//   "recurrence": {"frequency":"","interval_step":,"end_date":},   (optional)
-//   "participants": [x,x]               (optional, employee ids from the user table)
+//   "user_id": 5,                       (employee creating it = the owner, required)
+//   "title": "Team meeting",            (required, max 255 characters)
+//   "content": { ... },                 (optional, any JSON, stored in page.content)
+//   "start_time": "2026-10-20 10:00:00",
+//   "end_time": "2026-10-20 11:00:00",
+//   "recurrence": {"frequency":"weekly","interval_step":1,"end_date":null},   (optional)
+//   "participants": [2,3]               (optional, employee ids from the user table)
 // }
-// Owner of event counts as participant
+// An event is a page row (owner = page.FORuser) plus a calender_event row that
+// reuses the page's id. The owner is also added as a participant.
 // ---------------------------------------------------------------
 function createNewEvent(mysqli $conn): void {
     requireMethod('POST');
@@ -108,7 +107,7 @@ function createNewEvent(mysqli $conn): void {
 
         $recurrenceId = $recurrence ? insertRecurrence($conn, $recurrence) : null;
 
-        // Page and calender event IDs are the same
+        // the event uses the page's id (calender_event.ID is a PK and an FK to page.ID)
         $eventId = $pageId;
         run(
             $conn,
@@ -129,16 +128,16 @@ function createNewEvent(mysqli $conn): void {
 }
 
 // ---------------------------------------------------------------
-// POST editEvent only for owner
+// PUT editEvent (POST also accepted)   (owner only)
 // body: {"user_id":5, "event_id":1,
-//        "title":"", "content":{}, "start_time":"", "end_time":"",
+//        "title":"...", "content":{...}, "start_time":"...", "end_time":"...",
 //        "recurrence": {"frequency":"daily","interval_step":2,"end_date":null}}
-// only send the fields that should change
-// "recurrence": null -> makes the event non-repeating
-// "content": null -> clears the description
+// only send the fields you want to change
+// "recurrence": null  -> makes the event non-repeating
+// "content": null     -> clears the description
 // ---------------------------------------------------------------
 function editEvent(mysqli $conn): void {
-    requireMethod('POST');
+    requireMethod('PUT', 'POST');
     $body = getBody();
 
     $eventId = (int)($body['event_id'] ?? 0);
@@ -152,7 +151,7 @@ function editEvent(mysqli $conn): void {
     );
     if (!$current) respond(404, ['error' => 'event not found']);
 
-    // Validates start and end time 
+    // fields on calender_event
     $fields = [];
     $params = [];
     if (array_key_exists('start_time', $body)) {
@@ -166,7 +165,7 @@ function editEvent(mysqli $conn): void {
         $params[] = $body['end_time'];
     }
 
-    // Validates text fields
+    // fields on the page (title / description)
     $pageFields = [];
     $pageParams = [];
     if (array_key_exists('title', $body)) {
@@ -182,7 +181,7 @@ function editEvent(mysqli $conn): void {
         $pageParams[] = $body['content'] === null ? null : json_encode($body['content']);
     }
 
-    // Validate requrrence
+    // validate the recurrence (if any) before we start changing things
     $changeRecurrence = array_key_exists('recurrence', $body);
     $newRecurrence = null;
     if ($changeRecurrence && $body['recurrence'] !== null) {
@@ -194,7 +193,7 @@ function editEvent(mysqli $conn): void {
 
     if (!$fields && !$pageFields && !$changeRecurrence) respond(400, ['error' => 'nothing to update']);
 
-    // Check what the final time is
+    // check the final times
     $newStart = $body['start_time'] ?? $current['start_time'];
     $newEnd   = $body['end_time'] ?? $current['end_time'];
     if ($newEnd <= $newStart) respond(400, ['error' => 'end_time must be after start_time']);
@@ -216,7 +215,7 @@ function editEvent(mysqli $conn): void {
         }
 
         if ($pageFields) {
-            $pageParams[] = $eventId; // The event has the same ID as the ID in db
+            $pageParams[] = $eventId; // the page has the same id as the event
             run($conn, 'UPDATE page SET ' . implode(', ', $pageFields) . ' WHERE ID = ?', $pageParams);
         }
 

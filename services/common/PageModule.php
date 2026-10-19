@@ -21,7 +21,7 @@
  *      - Hämta lista:      $wikiManager->listPages($hasAccess);
  *      - Hämta specifik:   $wikiManager->getPage($pageId,$hasAccess);
  *      - Skapa sida:       $wikiManager->createPage($title,$content, $userId,$visibility);
- *      - Uppdatera sida:   $wikiManager->updatePage($pageId,$title, $content,$userId, $removedPic,$addedPic);
+ *      - Uppdatera sida:   $wikiManager->updatePage($pageId, $title,$content, $userId,$removedPic);
  *      - Ta bort sida:     $wikiManager->deletePage($pageId);
  *      - Kontrollera rätt: $wikiManager->canModify($pageId, $userId,$requireOwnerOrAdmin);
  */
@@ -195,9 +195,9 @@ class PageModule {
     }
 
     /**
-     * Uppdaterar sidtitel och innehåll samt sparar historik för wiki.
+     * Uppdaterar sidtitel och innehåll samt sparar historik i `update_history` (old_text, removed_pic, FORuser).
      */
-    public function updatePage(int $pageId, ?string $title, mixed$content, int $userId, ?string $removedPic = null, ?string $addedPic = null): bool {$this->conn->begin_transaction();
+    public function updatePage(int $pageId, ?string $title, mixed $content, int$userId, ?string $removedPic = null): bool {$this->conn->begin_transaction();
         try {
             $sqlOld = "
                 SELECT p.titel, p.content, sub.ID AS sub_id
@@ -214,12 +214,11 @@ class PageModule {
 
             if ($this->subTable === 'page_wiki') {
                 $oldText =$oldPage['content'];
-                $wikiId = (int)$oldPage['sub_id'];
                 $stmtHist =$this->conn->prepare("
-                    INSERT INTO update_history (old_text, removed_pic, added_pic, FORuser, FORpage_wiki)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO update_history (old_text, removed_pic, FORuser)
+                    VALUES (?, ?, ?)
                 ");
-                $stmtHist->bind_param("sssii", $oldText,$removedPic, $addedPic,$userId, $wikiId);$stmtHist->execute();
+                $stmtHist->bind_param("ssi", $oldText,$removedPic, $userId);$stmtHist->execute();
             }
 
             $newTitle = $title ?? $oldPage['titel'];

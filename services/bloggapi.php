@@ -2,7 +2,7 @@
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Authorization");
+header("Access-Control-Allow-Headers: Content-Type");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -16,144 +16,198 @@ $inputData = json_decode(file_get_contents("php://input"), true);
 
 switch ($method) {
 
-// --- GET: Hämta alla eller ett enskilt inlägg ---
+// --- GET: Hämta inlägg ---
     case 'GET':
-        // Kolla om ett ID skickades med i URL:en (t.ex. ?id=2)
         if (isset($_GET['id'])) {
             $id = $_GET['id'];
-            $stmt = $conn->prepare("SELECT * FROM blog_posts WHERE id = ?");
-            $stmt->bind_param("i", $id);
+            $stmt = $conn->prepare("
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, p.titel, p.content, p.created_at, p.FORuser 
+                FROM page_blog pb 
+                JOIN page p ON pb.FORpage = p.ID 
+                WHERE pb.ID = ? OR pb.FORpage = ?
+            ");
+            $stmt->bind_param("ii", $id, $id);
             $stmt->execute();
-            $result = $stmt->get_result();
-            $post = $result->fetch_assoc();
+            $post = $stmt->get_result()->fetch_assoc();
             $stmt->close();
 
             if ($post) {
-                echo json_encode([
-                    "status" => "success",
-                    "data" => $post
-                ]);
+                echo json_encode(["status" => "success", "data" => $post]);
             } else {
                 http_response_code(404);
                 echo json_encode(["status" => "error", "message" => "Inlägget hittades inte"]);
             }
         } else {
-            // Om inget ID skickades med, hämta alla inlägg
-            $result = $conn->query("SELECT * FROM blog_posts ORDER BY created_at DESC");
+            $result = $conn->query("
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, p.titel, p.content, p.created_at, p.FORuser 
+                FROM page_blog pb 
+                JOIN page p ON pb.FORpage = p.ID
+            ");
             $posts = [];
             if ($result) {
                 while ($row = $result->fetch_assoc()) {
                     $posts[] = $row;
                 }
             }
-
-            echo json_encode([
-                "status" => "success",
-                "data" => $posts
-            ]);
+            echo json_encode(["status" => "success", "data" => $posts]);
         }
         break;
 
-    // --- POST: Spara nytt inlägg ---
+    // --- POST: Skapa nytt inlägg i både page och page_blog ---
     case 'POST':
-        if (empty($inputData['title']) || empty($inputData['content'])) {
+        if (empty($inputData['titel']) || empty($inputData['content'])) {
             http_response_code(400);
             echo json_encode(["status" => "error", "message" => "Titel och innehåll krävs!"]);
             break;
         }
 
-        $title = $inputData['title'];
+        $titel = $inputData['titel'];
         $content = $inputData['content'];
-        $author = $inputData['author'] ?? 'Anonym';
-        $image_url = $inputData['image_url'] ?? null;
-        $visability = $inputData['visability'] ?? 'private';
+        $FORuser = $inputData['FORuser'] ?? 1; 
+        $FORvisability = $inputData['FORvisability'] ?? 1;
 
-        $stmt = $conn->prepare("INSERT INTO blog_posts (title, content, author, image_url, visability) VALUES (?, ?, ?, ?)");
-        
-        if ($stmt) {
-            $stmt->bind_param("ssss", $title, $content, $author, $image_url);
-            $stmt->execute();
-            $newId = $stmt->insert_id;
-            $stmt->close();
+        // Använd transaktion så att båda tabellerna sparas säkert ihop
+        $conn->begin_transaction();
+
+        try {
+            // 1. Skapa posten i 'page'
+            $stmtPage = $conn->prepare("INSERT INTO page (titel, content, FORuser) VALUES (?, ?, ?)");
+            $stmtPage->bind_param("ssi", $titel, $content, $FORuser);
+            $stmtPage->execute();
+            $pageId = $stmtPage->insert_id;
+            $stmtPage->close();
+
+            // 2. Skapa kopplingen i 'page_blog'
+            $stmtBlog = $conn->prepare("INSERT INTO page_blog (FORpage, FORvisability) VALUES (?, ?)");
+            $stmtBlog->bind_param("ii", $pageId, $FORvisability);
+            $stmtBlog->execute();
+            $blogId = $stmtBlog->insert_id;
+            $stmtBlog->close();
+
+            $conn->commit();
 
             echo json_encode([
                 "status" => "success",
-                "message" => "Blogginlägg sparat!",
+                "message" => "Inlägg skapat!",
                 "data" => [
-                    "id" => $newId,
-                    "title" => $title,
+                    "blog_id" => $blogId,
+                    "page_id" => $pageId,
+                    "titel" => $titel,
                     "content" => $content,
-                    "author" => $author,
-                    "image_url" => $image_url,
-                    "visability" => $visability
+                    "FORvisability" => $FORvisability,
+                    "FORuser" => $FORuser
                 ]
             ]);
-        } else {
+        } catch (Exception $e) {
+            $conn->rollback();
             http_response_code(500);
-            echo json_encode(["status" => "error", "message" => $conn->error]);
+            echo json_encode(["status" => "error", "message" => "Kunde inte spara inlägg: " . $e->getMessage()]);
         }
         break;
 
-// --- PUT: Uppdatera ett befintligt inlägg (inklusive bild) ---
+    // --- PUT: Uppdatera inlägg ---
     case 'PUT':
-        if (empty($inputData['id']) || empty($inputData['title']) || empty($inputData['content'])) {
+        if (empty($inputData['id']) || empty($inputData['titel']) || empty($inputData['content'])) {
             http_response_code(400);
             echo json_encode(["status" => "error", "message" => "ID, titel och innehåll krävs för uppdatering!"]);
             break;
         }
 
-        $id = $inputData['id'];
-        $title = $inputData['title'];
+        $blogId = $inputData['id'];
+        $titel = $inputData['titel'];
         $content = $inputData['content'];
-        $image_url = $inputData['image_url'] ?? null;
-        $visability = $inputData['visability'] ?? null;
+        $FORvisability = $inputData['FORvisability'] ?? 1;
 
-        // Om en ny image_url skickades med uppdaterar vi den också, annars behåller vi befintlig
-        if ($image_url !== null) {
-            $stmt = $conn->prepare("UPDATE blog_posts SET title = ?, content = ?, image_url = ? visability = ? WHERE id = ?");
-            if ($stmt) {
-                $stmt->bind_param("sssi", $title, $content, $image_url, $id);
-                $stmt->execute();
-                $stmt->close();
-            }
-        } else {
-            $stmt = $conn->prepare("UPDATE blog_posts SET title = ?, content = ? visability = ? WHERE id = ?");
-            if ($stmt) {
-                $stmt->bind_param("ssi", $title, $content, $id);
-                $stmt->execute();
-                $stmt->close();
-            }
+        // Hämta vilket page-ID som hör till blogg-ID:t
+        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ?");
+        $stmtFind->bind_param("i", $blogId);
+        $stmtFind->execute();
+        $res = $stmtFind->get_result()->fetch_assoc();
+        $stmtFind->close();
+
+        if (!$res) {
+            http_response_code(404);
+            echo json_encode(["status" => "error", "message" => "Blogginlägget hittades inte!"]);
+            break;
         }
 
-        echo json_encode([
-            "status" => "success",
-            "message" => "Inlägg med ID " . $id . " har uppdaterats!"
-        ]);
+        $pageId = $res['FORpage'];
+
+        $conn->begin_transaction();
+        try {
+            // Uppdatera 'page'
+            $stmtPage = $conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
+            $stmtPage->bind_param("ssi", $titel, $content, $pageId);
+            $stmtPage->execute();
+            $stmtPage->close();
+
+            // Uppdatera 'page_blog'
+            $stmtBlog = $conn->prepare("UPDATE page_blog SET FORvisability = ? WHERE ID = ?");
+            $stmtBlog->bind_param("ii", $FORvisability, $blogId);
+            $stmtBlog->execute();
+            $stmtBlog->close();
+
+            $conn->commit();
+
+            echo json_encode([
+                "status" => "success",
+                "message" => "Inlägget har uppdaterats!"
+            ]);
+        } catch (Exception $e) {
+            $conn->rollback();
+            http_response_code(500);
+            echo json_encode(["status" => "error", "message" => "Kunde inte uppdatera: " . $e->getMessage()]);
+        }
         break;
 
-    // --- DELETE: Ta bort ett inlägg ---
+    // --- DELETE: Ta bort inlägg ---
     case 'DELETE':
-        $id = $inputData['id'] ?? $_GET['id'] ?? null;
-
-        if (empty($id)) {
+        $blogId = $inputData['id'] ?? $_GET['id'] ?? null;
+        if (empty($blogId)) {
             http_response_code(400);
             echo json_encode(["status" => "error", "message" => "Inläggs-ID krävs för radering!"]);
             break;
         }
 
-        $stmt = $conn->prepare("DELETE FROM blog_posts WHERE id = ?");
-        if ($stmt) {
-            $stmt->bind_param("i", $id);
-            $stmt->execute();
-            $stmt->close();
+        // Hämta kopplat page-ID
+        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ?");
+        $stmtFind->bind_param("i", $blogId);
+        $stmtFind->execute();
+        $res = $stmtFind->get_result()->fetch_assoc();
+        $stmtFind->close();
+
+        if (!$res) {
+            http_response_code(404);
+            echo json_encode(["status" => "error", "message" => "Inlägget hittades inte!"]);
+            break;
+        }
+
+        $pageId = $res['FORpage'];
+
+        $conn->begin_transaction();
+        try {
+            // Radera från page_blog först
+            $stmtBlog = $conn->prepare("DELETE FROM page_blog WHERE ID = ?");
+            $stmtBlog->bind_param("i", $blogId);
+            $stmtBlog->execute();
+            $stmtBlog->close();
+
+            // Radera från page
+            $stmtPage = $conn->prepare("DELETE FROM page WHERE ID = ?");
+            $stmtPage->bind_param("i", $pageId);
+            $stmtPage->execute();
+            $stmtPage->close();
+
+            $conn->commit();
 
             echo json_encode([
                 "status" => "success",
-                "message" => "Inlägget med ID " . $id . " har raderats permanent!"
+                "message" => "Inlägget har raderats permanent!"
             ]);
-        } else {
+        } catch (Exception $e) {
+            $conn->rollback();
             http_response_code(500);
-            echo json_encode(["status" => "error", "message" => $conn->error]);
+            echo json_encode(["status" => "error", "message" => "Kunde inte radera: " . $e->getMessage()]);
         }
         break;
 

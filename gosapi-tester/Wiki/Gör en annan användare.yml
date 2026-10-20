@@ -1,0 +1,27 @@
+info:
+  name: Gör en annan användare
+  type: http
+  seq: 16
+
+http:
+  method: POST
+  url: https://gosapi.ddev.site:8443/services/wiki/admins.php?session_key=DIN_SESSION_KEY
+  params:
+    - name: session_key
+      value: DIN_SESSION_KEY
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "user_id": 2,
+        "role": "admin"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

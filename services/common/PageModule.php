@@ -6,24 +6,28 @@
  * ============================================================================
  *
  * Användningsområde:
- * Denna modul samlar all affärslogik för sidhantering som delas mellan Wiki
- * och Blogg (tabellerna `page`, `page_wiki`, `page_blog`, `update_history` m.fl.).
+ * Denna modul samlar all affärslogik för sidhantering och kommentarer som delas
+ * mellan Wiki och Blogg (tabellerna `page`, `page_wiki`, `page_blog`, `comment`, `update_history` m.fl.).
  *
  * Hur du använder modulen i en endpoint:
  * 1. Skapa en instans för önskad tjänst:
- *      $wikiManager = new PageModule($conn, 'wiki');
- *      $blogManager = new PageModule($conn, 'blog');
+ *      $wiki = new PageModule($conn, 'wiki');
+ *      $blog = new PageModule($conn, 'blog');
  *
  * 2. Synka inloggad användare mot databasen:
- *      $wikiManager->ensureLocalUser($userId);
+ *      $wiki->ensureLocalUser($userId);
  *
- * 3. Använd modulens metoder för CRUD:
- *      - Hämta lista:      $wikiManager->listPages($hasAccess);
- *      - Hämta specifik:   $wikiManager->getPage($pageId,$hasAccess);
- *      - Skapa sida:       $wikiManager->createPage($title,$content, $userId,$visibility);
- *      - Uppdatera sida:   $wikiManager->updatePage($pageId, $title,$content, $userId,$removedPic);
- *      - Ta bort sida:     $wikiManager->deletePage($pageId);
- *      - Kontrollera rätt: $wikiManager->canModify($pageId, $userId,$requireOwnerOrAdmin);
+ * 3. Använd modulens metoder för CRUD & Kommentarer:
+ *      - Hämta lista:        $wiki->listPages($hasAccess);
+ *      - Hämta specifik:     $wiki->getPage($pageId,$hasAccess);
+ *      - Skapa sida:         $wiki->createPage($title,$content, $userId,$visibility);
+ *      - Uppdatera sida:     $wiki->updatePage($pageId, $title,$content, $userId,$removedPic);
+ *      - Ta bort sida:       $wiki->deletePage($pageId);
+ *      - Kontrollera rätt:   $wiki->canModify($pageId, $userId,$requireOwnerOrAdmin);
+ *      - Hämta kommentarer:  $wiki->getComments($pageId);
+ *      - Skapa kommentar:    $wiki->addComment($pageId, $userId,$content);
+ *      - Ändra kommentar:    $wiki->updateComment($commentId,$content);
+ *      - Ta bort kommentar:  $wiki->deleteComment($commentId);
  */
 
 class PageModule {
@@ -67,7 +71,7 @@ class PageModule {
     }
 
     /**
-     * Kontrollerar behörighet för redigering och radering.
+     * Kontrollerar behörighet för redigering och radering av sida.
      */
     public function canModify(int $pageId, int $userId, bool$requireOwnerOrAdmin = false): bool {
         $stmtRole =$this->conn->prepare("
@@ -136,7 +140,7 @@ class PageModule {
             return null;
         }
 
-        if ($page['visibility'] === 'private' && !$hasAccess) {
+        if (($page['visibility'] === 'private') and (!$hasAccess)) {
             return ['error' => 'FORBIDDEN'];
         }
 
@@ -213,7 +217,14 @@ class PageModule {
             }
 
             if ($this->subTable === 'page_wiki') {
-                $oldText =$oldPage['content'];
+                $oldContentArr = json_decode($oldPage['content'], true);
+                if (is_array($oldContentArr)) {
+                    $oldContentArr['_page_id'] =$pageId;
+                    $oldText = json_encode($oldContentArr, JSON_UNESCAPED_UNICODE);
+                } else {
+                    $oldText =$oldPage['content'];
+                }
+
                 $stmtHist =$this->conn->prepare("
                     INSERT INTO update_history (old_text, removed_pic, FORuser)
                     VALUES (?, ?, ?)
@@ -243,5 +254,107 @@ class PageModule {
         $stmtDel =$this->conn->prepare("DELETE FROM page WHERE ID = ?");
         $stmtDel->bind_param("i", $pageId);
         return $stmtDel->execute();
+    }
+
+    /**
+     * ========================================================================
+     * KOMMENTARSHANTERING (Delas mellan Wiki och Blogg via tabellen `comment`)
+     * ========================================================================
+     */
+
+    /**
+     * Hämtar alla kommentarer för en specifik sida (sorterade äldst först).
+     */
+    public function getComments(int $pageId): array {
+        $stmt =$this->conn->prepare("
+            SELECT c.ID AS comment_id, c.content, c.created_at, c.last_update,
+                   c.FORuser AS user_id, u.username, c.FORpage AS page_id
+            FROM comment c
+            JOIN `user` u ON c.FORuser = u.ID
+            WHERE c.FORpage = ?
+            ORDER BY c.created_at ASC
+        ");
+        $stmt->bind_param("i", $pageId);$stmt->execute();
+        $rows =$stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        foreach ($rows as &$row) {
+            $row['content'] = json_decode($row['content'], true);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Skapar en ny kommentar på en sida.
+     */
+    public function addComment(int $pageId, int $userId, mixed$content): int {
+        if (!is_array($content)) {
+            $content = ['text' => (string)$content];
+        }
+        $contentJson = json_encode($content, JSON_UNESCAPED_UNICODE);
+
+        $stmt =$this->conn->prepare("
+            INSERT INTO comment (content, FORuser, FORpage)
+            VALUES (?, ?, ?)
+        ");
+        $stmt->bind_param("sii", $contentJson,$userId, $pageId);$stmt->execute();
+
+        return (int)$this->conn->insert_id;
+    }
+
+    /**
+     * Kontrollerar om en användare får redigera/radera en kommentar.
+     */
+    public function canModifyComment(int $commentId, int$userId): bool {
+        $stmtRole =$this->conn->prepare("
+            SELECT r.role_name
+            FROM `user` u
+            JOIN role r ON u.FORrole = r.ID
+            WHERE u.ID = ?
+        ");
+        $stmtRole->bind_param("i", $userId);$stmtRole->execute();
+        $role =$stmtRole->get_result()->fetch_assoc()['role_name'] ?? null;
+
+        if (($role === 'admin') or ($role === 'root_admin')) {
+            return true;
+        }
+
+        $stmt =$this->conn->prepare("
+            SELECT c.FORuser AS comment_author, p.FORuser AS page_owner
+            FROM comment c
+            JOIN page p ON c.FORpage = p.ID
+            WHERE c.ID = ?
+        ");
+        $stmt->bind_param("i", $commentId);$stmt->execute();
+        $row =$stmt->get_result()->fetch_assoc();
+
+        if (!$row) {
+            return false;
+        }
+
+        return ((int)$row['comment_author'] ===$userId) or ((int)$row['page_owner'] ===$userId);
+    }
+
+    /**
+     * Uppdaterar innehållet i en befintlig kommentar.
+     */
+    public function updateComment(int $commentId, mixed$content): bool {
+        if (!is_array($content)) {
+            $content = ['text' => (string)$content];
+        }
+        $contentJson = json_encode($content, JSON_UNESCAPED_UNICODE);
+
+        $stmt =$this->conn->prepare("UPDATE comment SET content = ? WHERE ID = ?");
+        $stmt->bind_param("si", $contentJson,$commentId);
+        return $stmt->execute();
+    }
+
+    /**
+     * Tar bort en kommentar.
+     */
+    public function deleteComment(int $commentId): bool {
+        $stmt =$this->conn->prepare("DELETE FROM comment WHERE ID = ?");
+        $stmt->bind_param("i", $commentId);
+        return $stmt->execute();
     }
 }

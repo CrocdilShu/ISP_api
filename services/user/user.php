@@ -18,7 +18,14 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 $action = $_GET['action'] ?? '';
 
-// rootLogin does not require an existing session token, so we check it before enforcing access
+// Handle action that dosnt need token to call
+switch ($action) {
+    case 'getUser':
+        getUser($conn);
+        exit;
+}
+
+// 2. For all other actions, check authentication/service access first
 if ($action !== 'rootLogin') {
     $sessionKey = getRequestSessionKey();
     $accountId = null;
@@ -28,12 +35,13 @@ if ($action !== 'rootLogin') {
     }
 }
 
+// 3. Handle protected actions
 switch ($action) {
-    case 'getUser':         getUser($conn);         break;
     case 'createNewUser':   createNewUser($conn);   break;
     case 'editUser':        editUser($conn);        break;
     case 'deleteUser':      deleteUser($conn);      break;
     case 'rootLogin':       rootLogin($conn);       break;
     default:
         respond(404, ['error' => 'unknown action']);
+        break;
 }

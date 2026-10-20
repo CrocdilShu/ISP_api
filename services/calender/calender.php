@@ -4,8 +4,10 @@ define('CALENDER_API', true);   // lets the part files know they are loaded thro
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/providerauth.php';
 
+// Helper funcs
+require_once __DIR__ . '/../helpers.php';
+
 // Calender files that contains the funcs
-require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/events.php';
 require_once __DIR__ . '/Participants.php';
 require_once __DIR__ . '/suggestions.php';

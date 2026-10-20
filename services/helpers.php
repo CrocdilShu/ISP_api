@@ -1,6 +1,6 @@
 <?php
 // Part of calender.php. Not a page of its own: it only defines functions.
-if (!defined('CALENDER_API')) {
+if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     http_response_code(403);
     exit;
 }

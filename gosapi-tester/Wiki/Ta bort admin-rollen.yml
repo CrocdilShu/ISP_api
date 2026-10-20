@@ -1,0 +1,23 @@
+info:
+  name: Ta bort admin-rollen
+  type: http
+  seq: 17
+
+http:
+  method: DELETE
+  url: https://gosapi.ddev.site:8443/services/wiki/admins.php?user_id=2&session_key=DIN_SESSION_KEY
+  params:
+    - name: user_id
+      value: "2"
+      type: query
+    - name: session_key
+      value: DIN_SESSION_KEY
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

@@ -1,0 +1,30 @@
+info:
+  name: "Lägg till en editor "
+  type: http
+  seq: 12
+
+http:
+  method: POST
+  url: https://gosapi.ddev.site:8443/services/wiki/permissions.php?page_id=13&session_key=DIN_SESSION_KEY
+  params:
+    - name: page_id
+      value: "13"
+      type: query
+    - name: session_key
+      value: DIN_SESSION_KEY
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "user_id": 2,
+        "role": "editor"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

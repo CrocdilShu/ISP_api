@@ -1,0 +1,26 @@
+info:
+  name: Ta bort en användares rättigheter
+  type: http
+  seq: 14
+
+http:
+  method: DELETE
+  url: https://gosapi.ddev.site:8443/services/wiki/permissions.php?page_id=13&user_id=2&session_key=DIN_SESSION_KEY
+  params:
+    - name: page_id
+      value: "13"
+      type: query
+    - name: user_id
+      value: "2"
+      type: query
+    - name: session_key
+      value: DIN_SESSION_KEY
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

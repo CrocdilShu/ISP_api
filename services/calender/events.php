@@ -5,7 +5,7 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Events: postEvents, createNewEvent, editEvent
+// Events: postEvents, createNewEvent, editEvent, deleteEvent
 
 // ---------------------------------------------------------------
 // POST getEvents
@@ -233,5 +233,50 @@ function editEvent(mysqli $conn): void {
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
         respond(500, ['error' => 'could not update event']);
+    }
+}
+// ---------------------------------------------------------------
+// DELETE deleteEvent
+// Deletes a calendar event and its underlying page.
+// Requires X-User-Token header.
+// ---------------------------------------------------------------
+function deleteEvent(mysqli $conn): void {
+    requireMethod('DELETE');
+
+    // Authenticate user via session token
+    $userId = actingUserId($conn);
+    if ($userId === 0) {
+        respond(401, ['error' => 'unauthorized or invalid user token']);
+    }
+
+    $body = getBody();
+    $eventId = (int)($body['event_id'] ?? $_GET['event_id'] ?? 0);
+    if ($eventId <= 0) {
+        respond(400, ['error' => 'event_id is required']);
+    }
+
+    // Check if the calendar event exists
+    $event = fetchOne($conn, 'SELECT ID FROM calender_event WHERE ID = ?', [$eventId]);
+    if (!$event) {
+        respond(404, ['error' => 'event not found']);
+    }
+
+    // Check ownership (from the page table) or user role (admin/root_admin)
+    $page = fetchOne($conn, 'SELECT FORuser FROM page WHERE ID = ?', [$eventId]);
+    $userRole = fetchOne($conn, 'SELECT r.role_name FROM user u JOIN role r ON r.ID = u.FORrole WHERE u.ID = ?', [$userId]);
+
+    $isAdmin = in_array($userRole['role_name'] ?? '', ['admin', 'root_admin'], true);
+    $isOwner = ((int)($page['FORuser'] ?? 0) === $userId);
+
+    if (!$isOwner && !$isAdmin) {
+        respond(403, ['error' => 'you do not have permission to delete this event']);
+    }
+
+    try {
+        // Deleting the page row automatically deletes the calender_event due to ON DELETE CASCADE
+        run($conn, 'DELETE FROM page WHERE ID = ?', [$eventId]);
+        respond(200, ['message' => 'event deleted successfully']);
+    } catch (mysqli_sql_exception $e) {
+        respond(500, ['error' => 'could not delete the event']);
     }
 }

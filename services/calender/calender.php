@@ -61,6 +61,7 @@ switch ($action) {
     case 'addSuggestion':    addSuggestion($conn);    break;
     case 'editSuggestion':   editSuggestion($conn);   break;
     case 'deleteSuggestion': deleteSuggestion($conn); break;
+    case 'deleteEvent':      deleteEvent($conn);      break;
     default:
         respond(404, ['error' => 'unknown action']);
 }

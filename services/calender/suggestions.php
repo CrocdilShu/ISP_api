@@ -8,6 +8,7 @@ if (!defined('CALENDER_API')) {
 // Suggestions: getSuggestions, addSuggestion, editSuggestion, deleteSuggestion
 
 // ---------------------------------------------------------------
+// SUGGESTIONS (comments from participants)
 // Stored in the `comment` table: FORpage = event id (the event shares the
 // page's id), FORuser = author, content = {"text": "..."} as JSON.
 // ---------------------------------------------------------------
@@ -38,8 +39,8 @@ function loadSuggestion(mysqli $conn, int $suggestionId): array {
     $row = fetchOne(
         $conn,
         'SELECT c.ID, c.FORuser, c.FORpage
-        FROM comment c JOIN calender_event e ON e.ID = c.FORpage
-        WHERE c.ID = ?',
+         FROM comment c JOIN calender_event e ON e.ID = c.FORpage
+         WHERE c.ID = ?',
         [$suggestionId]
     );
     if (!$row) respond(404, ['error' => 'suggestion not found']);
@@ -61,10 +62,10 @@ function getSuggestions(mysqli $conn): void {
         $conn,
         'SELECT c.ID AS suggestion_id, c.content, c.created_at, c.last_update,
                 c.FORuser AS user_id, u.username, u.pfp_file
-        FROM comment c
-        LEFT JOIN user u ON u.ID = c.FORuser
-        WHERE c.FORpage = ?
-        ORDER BY c.created_at ASC, c.ID ASC',
+         FROM comment c
+         LEFT JOIN user u ON u.ID = c.FORuser
+         WHERE c.FORpage = ?
+         ORDER BY c.created_at ASC, c.ID ASC',
         [$eventId]
     );
 
@@ -80,7 +81,7 @@ function getSuggestions(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // POST createSuggestion (the old name addSuggestion also works)   (participants only)
-// body: {"user_id":4, "event_id":1, "text":"Can we move it to 11:00?"}
+// body: {"event_id":1, "text":"Can we move it to 11:00?"}
 // ---------------------------------------------------------------
 function addSuggestion(mysqli $conn): void {
     requireMethod('POST');
@@ -101,7 +102,7 @@ function addSuggestion(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT editSuggestion (POST also accepted)   (the author only, and they must still be a participant)
-// body: {"user_id":4, "suggestion_id":9, "text":"New text"}
+// body: {"suggestion_id":9, "text":"New text"}
 // ---------------------------------------------------------------
 function editSuggestion(mysqli $conn): void {
     requireMethod('PUT', 'POST');
@@ -125,7 +126,7 @@ function editSuggestion(mysqli $conn): void {
 // ---------------------------------------------------------------
 // DELETE deleteSuggestion (POST also accepted)
 // suggestion_id can be sent in the URL or in the body   (the author, or the owner of the event)
-// body: {"user_id":4, "suggestion_id":9}
+// body: {"suggestion_id":9}
 // ---------------------------------------------------------------
 function deleteSuggestion(mysqli $conn): void {
     requireMethod('DELETE', 'POST');

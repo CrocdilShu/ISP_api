@@ -4,8 +4,36 @@ info:
   seq: 2
 
 http:
-  method: PUT
-  url: ""
+  method: POST
+  url: https://gosapi.ddev.site:8443/services/user/user.php?action=editUser&user_id=5&description=korv&pfp_file=&FORrole=2
+  headers:
+    - name: X-Session-Key
+      value: bf152400ff237740ab3fa5b1db2300addc4d70b43ad835073e02fe88d5575a7e
+  params:
+    - name: action
+      value: editUser
+      type: query
+    - name: user_id
+      value: "5"
+      type: query
+    - name: description
+      value: korv
+      type: query
+    - name: pfp_file
+      value: ""
+      type: query
+    - name: FORrole
+      value: "2"
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+            "user_id": 5,
+            "description": "Old Chines Ruler",           
+            "pfp_file": "",              
+            "FORrole": 2                    
+      }
   auth: inherit
 
 settings:

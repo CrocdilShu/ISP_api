@@ -9,6 +9,7 @@ require_once __DIR__ . '/../helpers.php';
 
 // User files that contains the funcs
 require_once __DIR__ . '/userfuncs.php';
+require_once __DIR__ . '/userlogin.php';
 require_once __DIR__ . '/rootlogin.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -18,7 +19,20 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 $action = $_GET['action'] ?? '';
 
-// rootLogin does not require an existing session token, so we check it before enforcing access
+// Handle action that dosnt need token to call
+switch ($action) {
+    case 'getUser':
+        getUser($conn);
+        exit;
+    case 'loginUser':
+        loginUser($conn);
+        exit;
+    case 'logoutUser':
+        logoutUser($conn);
+        exit;
+}
+
+// For all other actions, check authentication/service access first
 if ($action !== 'rootLogin') {
     $sessionKey = getRequestSessionKey();
     $accountId = null;
@@ -28,12 +42,13 @@ if ($action !== 'rootLogin') {
     }
 }
 
+// Handle protected actions
 switch ($action) {
-    case 'getUser':         getUser($conn);         break;
     case 'createNewUser':   createNewUser($conn);   break;
     case 'editUser':        editUser($conn);        break;
     case 'deleteUser':      deleteUser($conn);      break;
     case 'rootLogin':       rootLogin($conn);       break;
     default:
         respond(404, ['error' => 'unknown action']);
+        break;
 }

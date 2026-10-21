@@ -6,11 +6,23 @@ require_once __DIR__ . '/../common/PageModule.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
-$method =$_SERVER['REQUEST_METHOD'];
-$sessionKey = getRequestSessionKey();$userId = null;
+$method = $_SERVER['REQUEST_METHOD'];
+$sessionKey = getRequestSessionKey();
+$providerAccountId = null;
 
-// Kontrollera behörighet till Wiki-tjänsten via The Provider
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI,$userId);
+$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+
+$wiki = new PageModule($conn, 'wiki');
+$userId = null;
+if ($hasWikiAccess) {
+    try {
+        $userId = $wiki->resolveRequestUser($sessionKey, $providerAccountId ? (int)$providerAccountId : null);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Kunde inte synkronisera lokal användare: ' . $e->getMessage()]);
+        exit;
+    }
+}
 
 if ((!$hasWikiAccess) or (!$userId)) {
     http_response_code(403);
@@ -18,31 +30,11 @@ if ((!$hasWikiAccess) or (!$userId)) {
     exit;
 }
 
-$wiki = new PageModule($conn, 'wiki');
-try {
-    $wiki->ensureLocalUser((int)$userId);
-} catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode(['error' => 'Kunde inte synkronisera lokal användare: ' . $e->getMessage()]);
-    exit;
-}
+$currentUserRole = $wiki->getUserRole((int)$userId);
 
-// Säkerställ att standardrollerna finns i tabellen `role`
-$conn->query("INSERT IGNORE INTO role (ID, role_name) VALUES (1, 'user'), (2, 'admin'), (3, 'root_admin')");
-
-// Hämta inloggad användares roll
-$stmtRole =$conn->prepare("
-    SELECT r.role_name
-    FROM `user` u
-    JOIN role r ON u.FORrole = r.ID
-    WHERE u.ID = ?
-");
-$stmtRole->bind_param("i", $userId);$stmtRole->execute();
-$currentUserRole =$stmtRole->get_result()->fetch_assoc()['role_name'] ?? 'user';
-
-// 1. GET: Lista alla admins och root_admins (tillgängligt för inloggade användare)
+// 1. GET: Lista alla admins och root_admins (e-post visas bara för admins)
 if ($method === 'GET') {
-    $result =$conn->query("
+    $result = $conn->query("
         SELECT u.ID AS user_id, u.username, u.email, r.role_name
         FROM `user` u
         JOIN role r ON u.FORrole = r.ID
@@ -50,6 +42,13 @@ if ($method === 'GET') {
         ORDER BY r.ID DESC, u.ID ASC
     ");
     $admins = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+
+    if ($currentUserRole !== 'admin' && $currentUserRole !== 'root_admin') {
+        foreach ($admins as &$a) {
+            unset($a['email']);
+        }
+        unset($a);
+    }
 
     echo json_encode([
         'current_user_id' => (int)$userId,
@@ -59,7 +58,7 @@ if ($method === 'GET') {
     exit;
 }
 
-// Endast root_admin (eller admin om ni tillåter det) får utse/ta bort andra admins
+// Endast root_admin får utse eller ta bort andra admins
 if ($currentUserRole !== 'root_admin') {
     http_response_code(403);
     echo json_encode([
@@ -70,9 +69,13 @@ if ($currentUserRole !== 'root_admin') {
 }
 
 // 2. POST: Gör en användare till admin (eller root_admin)
-if ($method === 'POST') {$input = json_decode(file_get_contents('php://input'), true) ?? [];
+if ($method === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        $input = [];
+    }
     $targetUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : (int)($input['user_id'] ?? 0);
-    $newRoleName =$input['role'] ?? 'admin'; // 'admin' som standard
+    $newRoleName = $input['role'] ?? 'admin';
 
     if (!$targetUserId) {
         http_response_code(400);
@@ -86,17 +89,23 @@ if ($method === 'POST') {$input = json_decode(file_get_contents('php://input'), 
         exit;
     }
 
-    // Synka målanvändaren så att den säkert finns i lokala `user`-tabellen
-    $wiki->ensureLocalUser($targetUserId);
+    try {
+        $wiki->ensureLocalUser($targetUserId);
 
-    // Hämta rollens ID
-    $stmtGetRole =$conn->prepare("SELECT ID FROM role WHERE role_name = ?");
-    $stmtGetRole->bind_param("s", $newRoleName);$stmtGetRole->execute();
-    $roleRow =$stmtGetRole->get_result()->fetch_assoc();
-    $roleId = (int)($roleRow['ID'] ?? 2);
+        $stmtGetRole = $conn->prepare("SELECT ID FROM role WHERE role_name = ?");
+        $stmtGetRole->bind_param("s", $newRoleName);
+        $stmtGetRole->execute();
+        $roleRow = $stmtGetRole->get_result()->fetch_assoc();
+        $roleId = (int)($roleRow['ID'] ?? 2);
 
-    $stmtUpd =$conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
-    $stmtUpd->bind_param("ii", $roleId, $targetUserId);$stmtUpd->execute();
+        $stmtUpd = $conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
+        $stmtUpd->bind_param("ii", $roleId, $targetUserId);
+        $stmtUpd->execute();
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Kunde inte ändra roll: ' . $e->getMessage()]);
+        exit;
+    }
 
     echo json_encode([
         'success' => true,
@@ -105,8 +114,12 @@ if ($method === 'POST') {$input = json_decode(file_get_contents('php://input'), 
     exit;
 }
 
-// 3. DELETE: Ta bort admin-behörighet från en användare (återställ till vanlig 'user')
-if ($method === 'DELETE') {$input = json_decode(file_get_contents('php://input'), true) ?? [];
+// 3. DELETE: Ta bort admin-behörighet (återställ till 'user')
+if ($method === 'DELETE') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        $input = [];
+    }
     $targetUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : (int)($input['user_id'] ?? 0);
 
     if (!$targetUserId) {
@@ -121,12 +134,19 @@ if ($method === 'DELETE') {$input = json_decode(file_get_contents('php://input')
         exit;
     }
 
-    $stmtGetRole =$conn->prepare("SELECT ID FROM role WHERE role_name = 'user'");
-    $stmtGetRole->execute();
-    $userRoleId = (int)($stmtGetRole->get_result()->fetch_assoc()['ID'] ?? 1);
+    try {
+        $stmtGetRole = $conn->prepare("SELECT ID FROM role WHERE role_name = 'user'");
+        $stmtGetRole->execute();
+        $userRoleId = (int)($stmtGetRole->get_result()->fetch_assoc()['ID'] ?? 1);
 
-    $stmtUpd =$conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
-    $stmtUpd->bind_param("ii", $userRoleId, $targetUserId);$stmtUpd->execute();
+        $stmtUpd = $conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
+        $stmtUpd->bind_param("ii", $userRoleId, $targetUserId);
+        $stmtUpd->execute();
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Kunde inte ändra roll: ' . $e->getMessage()]);
+        exit;
+    }
 
     echo json_encode([
         'success' => true,

@@ -34,11 +34,18 @@ switch ($action) {
 
 // For all other actions, check authentication/service access first
 if ($action !== 'rootLogin') {
-    $sessionKey = getRequestSessionKey();
+    $rootUser = fetchOne(
+        $conn, 
+        'SELECT token FROM root_user WHERE ID = ? LIMIT 1', 
+        [COMPANY_ID]
+    );
+    $storedSessionKey = $rootUser['token'] ?? null;
+
     $accountId = null;
 
-    if (!hasServiceAccess($sessionKey, SERVICE_CALENDAR, $accountId)) {
-        respond(403, ['error' => 'no access']);
+    // 2. Validate the company's stored token against the provider's service bitmask
+    if (!hasServiceAccess($storedSessionKey, SERVICE_CALENDAR, $accountId)) {
+        respond(403, ['error' => 'Company session token is invalid or expired. Please run rootLogin.']);
     }
 }
 

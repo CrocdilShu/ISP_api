@@ -8,16 +8,38 @@ define('SERVICE_BLOG', 2);
 define('SERVICE_WIKI', 4);
 
 function getRequestSessionKey(): ?string {
+    // Check query parameter
     if (!empty($_GET['session_key'])) {
         return trim($_GET['session_key']);
     }
+    
+    // Check custom header X-Session-Key
     if (!empty($_SERVER['HTTP_X_SESSION_KEY'])) {
         return trim($_SERVER['HTTP_X_SESSION_KEY']);
     }
+    
+    // Check standard Authorization Bearer header
+    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        $authHeader = trim($_SERVER['HTTP_AUTHORIZATION']);
+        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+            return trim($matches[1]);
+        }
+    }
+
+    // Fallback if
+    if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+        $authHeader = trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+            return trim($matches[1]);
+        }
+    }
+
+    // Check JSON body
     $input = json_decode(file_get_contents('php://input'), true);
     if (is_array($input) && !empty($input['session_key'])) {
         return trim($input['session_key']);
     }
+    
     return null;
 }
 

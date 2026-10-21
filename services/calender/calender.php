@@ -1,8 +1,8 @@
 <?php
 define('CALENDER_API', true);   // lets the part files know they are loaded through this file
 
-require_once __DIR__ . '/../config/db.php';   // gives us the mysqli connection $conn
-require_once __DIR__ . '/auth.php';           // your verify-token file
+require_once __DIR__ . '/../../config/db.php';   // gives us the mysqli connection $conn
+require_once __DIR__ . '/../../config/providerauth.php';           // your verify-token file
 
 // the calendar code, split by topic
 require_once __DIR__ . '/../helpers.php';        // shared helpers, validation, recurrence
@@ -32,11 +32,19 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // $accountId is the shared company token's id from the provider.
 // It only proves access; it is never an employee.
 // ---------------------------------------------------------------
-$sessionKey = getRequestSessionKey();
+// 1. Fetch the stored company/root token from the local database
+$rootUser = fetchOne(
+    $conn, 
+    'SELECT token FROM root_user WHERE ID = ? LIMIT 1', 
+    [COMPANY_ID]
+);
+$storedSessionKey = $rootUser['token'] ?? null;
+
 $accountId = null;
 
-if (!hasServiceAccess($sessionKey, SERVICE_CALENDAR, $accountId)) {
-    respond(403, ['error' => 'no access']);
+// 2. Validate the company's stored token against the provider's service bitmask
+if (!hasServiceAccess($storedSessionKey, SERVICE_CALENDAR, $accountId)) {
+    respond(403, ['error' => 'Company session token is invalid or expired. Please run rootLogin.']);
 }
 
 $action = $_GET['action'] ?? '';
@@ -50,7 +58,7 @@ switch ($action) {
     case 'editParticipants': editParticipants($conn); break;
     case 'getSuggestions':   getSuggestions($conn);   break;
     case 'createSuggestion': addSuggestion($conn);    break;
-    case 'addSuggestion':    addSuggestion($conn);    break;   // old name, still works
+    case 'addSuggestion':    addSuggestion($conn);    break;
     case 'editSuggestion':   editSuggestion($conn);   break;
     case 'deleteSuggestion': deleteSuggestion($conn); break;
     default:

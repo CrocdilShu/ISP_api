@@ -1,21 +1,37 @@
 <?php
 define('CALENDER_API', true);   // lets the part files know they are loaded through this file
 
-require_once __DIR__ . '/../../config/db.php';
-require_once __DIR__ . '/../../config/providerauth.php';
+require_once __DIR__ . '/../config/db.php';   // gives us the mysqli connection $conn
+require_once __DIR__ . '/auth.php';           // your verify-token file
 
-// Helper funcs
-require_once __DIR__ . '/../helpers.php';
+// the calendar code, split by topic
+require_once __DIR__ . '/../helpers.php';        // shared helpers, validation, recurrence
+require_once __DIR__ . '/events.php';         // getEvents, createNewEvent, editEvent
+require_once __DIR__ . '/Participants.php';   // getParticipants, addParticipants, editParticipants
+require_once __DIR__ . '/suggestions.php';    // getSuggestions, addSuggestion, editSuggestion, deleteSuggestion
 
-// Calender files that contains the funcs
-require_once __DIR__ . '/events.php';
-require_once __DIR__ . '/Participants.php';
-require_once __DIR__ . '/suggestions.php';
 header('Content-Type: application/json; charset=utf-8');
 
 // make mysqli throw exceptions on errors (so try/catch works on every PHP version)
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
+// ---------------------------------------------------------------
+// Two tokens identify every call:
+//   X-Session-Key   the shared company key from the provider: which services may be used
+//   X-User-Token    the employee's own token (issued by userLogin): who is calling
+// Every event is a page: page.titel / page.content hold the title and description
+// and page.FORuser is the OWNER. calender_event.ID is both its primary key and a
+// foreign key to page.ID, so an event and its page share the same id.
+// Only the owner can edit the event and invite/remove participants.
+// Reading is open to anyone with the company key.
+// Suggestions are rows in the `comment` table (comment.FORpage = event id).
+// ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// auth + routing:  calender.php?action=getEvents
+// $accountId is the shared company token's id from the provider.
+// It only proves access; it is never an employee.
+// ---------------------------------------------------------------
 $sessionKey = getRequestSessionKey();
 $accountId = null;
 
@@ -33,7 +49,8 @@ switch ($action) {
     case 'addParticipants':  addParticipants($conn);  break;
     case 'editParticipants': editParticipants($conn); break;
     case 'getSuggestions':   getSuggestions($conn);   break;
-    case 'addSuggestion':    addSuggestion($conn);    break;
+    case 'createSuggestion': addSuggestion($conn);    break;
+    case 'addSuggestion':    addSuggestion($conn);    break;   // old name, still works
     case 'editSuggestion':   editSuggestion($conn);   break;
     case 'deleteSuggestion': deleteSuggestion($conn); break;
     default:

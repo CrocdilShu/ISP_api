@@ -9,6 +9,7 @@ require_once __DIR__ . '/../helpers.php';
 
 // User files that contains the funcs
 require_once __DIR__ . '/userfuncs.php';
+require_once __DIR__ . '/userlogin.php';
 require_once __DIR__ . '/rootlogin.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -23,9 +24,15 @@ switch ($action) {
     case 'getUser':
         getUser($conn);
         exit;
+    case 'loginUser':
+        loginUser($conn);
+        exit;
+    case 'logoutUser':
+        logoutUser($conn);
+        exit;
 }
 
-// 2. For all other actions, check authentication/service access first
+// For all other actions, check authentication/service access first
 if ($action !== 'rootLogin') {
     $sessionKey = getRequestSessionKey();
     $accountId = null;
@@ -35,7 +42,7 @@ if ($action !== 'rootLogin') {
     }
 }
 
-// 3. Handle protected actions
+// Handle protected actions
 switch ($action) {
     case 'createNewUser':   createNewUser($conn);   break;
     case 'editUser':        editUser($conn);        break;

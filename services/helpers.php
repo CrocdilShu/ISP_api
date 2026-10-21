@@ -1,5 +1,6 @@
 <?php
-// Part of calender.php. Not a page of its own: it only defines functions.
+// Shared by every service (calender.php, user.php, ...). Not a page of its own:
+// it only defines functions. Refuse to run if someone opens this file directly.
 if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     http_response_code(403);
     exit;
@@ -71,19 +72,92 @@ function isParticipant(mysqli $conn, int $eventId, int $userId): bool {
     ) !== null;
 }
 
-// the employee making the request (sent by the caller, see top of file)
-function actingUserId(): int {
-    if (!empty($_SERVER['HTTP_X_USER_ID'])) return (int)$_SERVER['HTTP_X_USER_ID'];
-    if (!empty($_GET['user_id'])) return (int)$_GET['user_id'];
-    $body = getBody();
-    return (int)($body['user_id'] ?? 0);
+// ---------------------------------------------------------------
+// Employee identity.
+// There are TWO tokens in every call:
+//   X-Session-Key   the shared company key from the provider (what services may be used)
+//   X-User-Token    the employee's own token, issued by userLogin (who is calling)
+// The token in the database is hashed
+// ---------------------------------------------------------------
+
+// Set the minutes it should be valid, when you call you update it with 30 minutes
+const USER_SESSION_MINUTES = 30;
+
+// the employee token from the X-User-Token header, or null
+function getUserToken(): ?string {
+    $token = trim($_SERVER['HTTP_X_USER_TOKEN'] ?? '');
+    return $token !== '' ? $token : null;
 }
 
+// Issues a new token for an employee. Returns the token (only shows once) and when it expires.
+function createUserSession(mysqli $conn, int $userId): array {
+    // Delete expired sessions
+    run($conn, 'DELETE FROM user_session WHERE expire_date < NOW()');
+
+    $token = bin2hex(random_bytes(32));
+    $tokenHash = hash('sha256', $token);
+
+    // Check if this user already has a row in user_session
+    $existingSession = fetchOne($conn, 'SELECT ID FROM user_session WHERE FORuser = ?', [$userId]);
+
+    if ($existingSession) {
+        // Update the table row
+        $sessionId = (int)$existingSession['ID'];
+        run(
+            $conn,
+            'UPDATE user_session 
+            SET token_hash = ?, last_used = NOW(), expire_date = DATE_ADD(NOW(), INTERVAL ? MINUTE) 
+            WHERE ID = ?',
+            [$tokenHash, USER_SESSION_MINUTES, $sessionId]
+        );
+    } else {
+        // INSERT if employe havnt had session before
+        run(
+            $conn,
+            'INSERT INTO user_session (token_hash, FORuser, last_used, expire_date)
+            VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? MINUTE))',
+            [$tokenHash, $userId, USER_SESSION_MINUTES]
+        );
+        $sessionId = (int)$conn->insert_id;
+    }
+
+    // Fetch the updated expire_date to return to the client
+    $row = fetchOne($conn, 'SELECT expire_date FROM user_session WHERE ID = ?', [$sessionId]);
+
+    return ['token' => $token, 'expires_at' => $row['expire_date']];
+}
+// A valid token is renewed when making a call, it adds USER_SESSION_MINUTES from now.
+function actingUserId(?mysqli $conn = null): int {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $conn ??= $GLOBALS['conn'] ?? null;
+    $token = getUserToken();
+    if ($token === null || $conn === null) return 0;
+
+    $session = fetchOne(
+        $conn,
+        'SELECT ID, FORuser FROM user_session WHERE token_hash = ? AND expire_date > NOW()',
+        [hash('sha256', $token)]
+    );
+    if (!$session) return $cache = 0;
+
+    run(
+        $conn,
+        'UPDATE user_session SET last_used = NOW(), expire_date = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE ID = ?',
+        [USER_SESSION_MINUTES, (int)$session['ID']]
+    );
+    return $cache = (int)$session['FORuser'];
+}
+
+// The employee making the request, or a 401. Use on all calls that needs to know who made the call
 function requireActingUser(mysqli $conn): int {
-    $id = actingUserId();
-    if ($id <= 0) respond(400, ['error' => 'user_id (the employee making the request) is required']);
-    if (!fetchOne($conn, 'SELECT 1 FROM user WHERE ID = ?', [$id])) {
-        respond(400, ['error' => 'unknown user_id']);
+    if (getUserToken() === null) {
+        respond(401, ['error' => 'user token required (header X-User-Token)']);
+    }
+    $id = actingUserId($conn);
+    if ($id <= 0) {
+        respond(401, ['error' => 'invalid or expired user token']);
     }
     return $id;
 }
@@ -154,7 +228,7 @@ function cleanupRecurrence(mysqli $conn, ?int $recurrenceId): void {
     run(
         $conn,
         'DELETE FROM recurrence WHERE ID = ?
-        AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
+         AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
         [$recurrenceId, $recurrenceId]
     );
 }

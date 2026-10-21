@@ -19,9 +19,9 @@ function getEvents(mysqli $conn): void {
     requireMethod('GET');
 
     $sql = 'SELECT e.ID, e.start_time, e.end_time, e.created_at, e.FORrecurrence,
-                pg.titel AS title, pg.content,
-                pg.FORuser AS owner_id, o.username AS owner_username,
-                r.frequency, r.interval_step, r.end_date AS recurrence_end_date
+                   pg.titel AS title, pg.content,
+                   pg.FORuser AS owner_id, o.username AS owner_username,
+                   r.frequency, r.interval_step, r.end_date AS recurrence_end_date
             FROM calender_event e
             JOIN page pg ON pg.ID = e.ID
             LEFT JOIN user o ON o.ID = pg.FORuser
@@ -31,7 +31,7 @@ function getEvents(mysqli $conn): void {
 
     if (!empty($_GET['user_id'])) {
         $sql .= ' AND EXISTS (SELECT 1 FROM participant p
-                WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
+                              WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
         $params[] = (int)$_GET['user_id'];
     }
     if (!empty($_GET['from']) && validDate($_GET['from'])) {
@@ -59,7 +59,6 @@ function getEvents(mysqli $conn): void {
 // ---------------------------------------------------------------
 // POST createNewEvent
 // body: {
-//   "user_id": 5,                       (employee creating it = the owner, required)
 //   "title": "Team meeting",            (required, max 255 characters)
 //   "content": { ... },                 (optional, any JSON, stored in page.content)
 //   "start_time": "2026-10-20 10:00:00",
@@ -72,6 +71,8 @@ function getEvents(mysqli $conn): void {
 // ---------------------------------------------------------------
 function createNewEvent(mysqli $conn): void {
     requireMethod('POST');
+    // the employee creating the event becomes its owner and is always a participant
+    $ownerId = requireActingUser($conn);
     $body = getBody();
 
     $title = trim((string)($body['title'] ?? ''));
@@ -94,7 +95,6 @@ function createNewEvent(mysqli $conn): void {
         $recurrence = validateRecurrence($body['recurrence']);
     }
 
-    $ownerId = requireActingUser($conn);
     $participants = is_array($body['participants'] ?? null) ? $body['participants'] : [];
     $userIds = cleanUserIds(array_merge([$ownerId], $participants));
     requireUsersExist($conn, $userIds);
@@ -129,7 +129,7 @@ function createNewEvent(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT editEvent (POST also accepted)   (owner only)
-// body: {"user_id":5, "event_id":1,
+// body: {"event_id":1,
 //        "title":"...", "content":{...}, "start_time":"...", "end_time":"...",
 //        "recurrence": {"frequency":"daily","interval_step":2,"end_date":null}}
 // only send the fields you want to change

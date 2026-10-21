@@ -1,0 +1,6 @@
+name: data
+variables:
+  - name: X-Session-Token
+    value: af8c89bdc3582e5c0859e888f84627d9714ea65a4ee52c7bd77d5b589d6e3e1f
+  - name: X-User-Token
+    value: a2e99968931ebca64b302c8bc7c19bcd5935703cfa4160d9b12cdd161aee54a4

@@ -20,9 +20,9 @@ function getParticipants(mysqli $conn): void {
     $rows = fetchAll(
         $conn,
         'SELECT p.ID AS participant_id, u.ID AS user_id, u.username, u.pfp_file
-        FROM participant p
-        LEFT JOIN user u ON u.ID = p.FORuser
-        WHERE p.FORcalender_event = ?',
+         FROM participant p
+         LEFT JOIN user u ON u.ID = p.FORuser
+         WHERE p.FORcalender_event = ?',
         [$eventId]
     );
     respond(200, ['participants' => $rows]);
@@ -30,7 +30,7 @@ function getParticipants(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // POST addParticipants
-// body: {"user_id":5, "event_id":1, "user_ids":[4,6]}   (user_id = owner making the call)
+// body: {"event_id":1, "user_ids":[4,6]}   (the owner, found from X-User-Token, is the caller)
 // ---------------------------------------------------------------
 function addParticipants(mysqli $conn): void {
     requireMethod('POST');
@@ -63,7 +63,7 @@ function addParticipants(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT editParticipants (POST also accepted)
-// body: {"user_id":5, "event_id":1, "user_ids":[2,3,6]}
+// body: {"event_id":1, "user_ids":[2,3,6]}
 // replaces the whole participant list with user_ids (the owner always stays).
 // ---------------------------------------------------------------
 function editParticipants(mysqli $conn): void {

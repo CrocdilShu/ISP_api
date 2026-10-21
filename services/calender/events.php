@@ -5,10 +5,10 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Events: getEvents, createNewEvent, editEvent
+// Events: postEvents, createNewEvent, editEvent
 
 // ---------------------------------------------------------------
-// GET getEvents
+// POST getEvents
 // optional: ?from=...&to=...  (Y-m-d H:i:s)
 //           ?user_id=5        (only events that employee takes part in)
 // returns ALL events of the company unless user_id is given.
@@ -16,12 +16,19 @@ if (!defined('CALENDER_API')) {
 // the client expands the repeats.
 // ---------------------------------------------------------------
 function getEvents(mysqli $conn): void {
-    requireMethod('GET');
+    requireMethod('POST');
+
+    // Läs JSON-data från request body
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+
+    $userId = $input['user_id'] ?? null;
+    $from   = $input['from'] ?? null;
+    $to     = $input['to'] ?? null;
 
     $sql = 'SELECT e.ID, e.start_time, e.end_time, e.created_at, e.FORrecurrence,
-                   pg.titel AS title, pg.content,
-                   pg.FORuser AS owner_id, o.username AS owner_username,
-                   r.frequency, r.interval_step, r.end_date AS recurrence_end_date
+                pg.titel AS title, pg.content,
+                pg.FORuser AS owner_id, o.username AS owner_username,
+                r.frequency, r.interval_step, r.end_date AS recurrence_end_date
             FROM calender_event e
             JOIN page pg ON pg.ID = e.ID
             LEFT JOIN user o ON o.ID = pg.FORuser
@@ -29,20 +36,20 @@ function getEvents(mysqli $conn): void {
             WHERE 1 = 1';
     $params = [];
 
-    if (!empty($_GET['user_id'])) {
+    if (!empty($userId)) {
         $sql .= ' AND EXISTS (SELECT 1 FROM participant p
-                              WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
-        $params[] = (int)$_GET['user_id'];
+            WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
+        $params[] = (int)$userId;
     }
-    if (!empty($_GET['from']) && validDate($_GET['from'])) {
+    if (!empty($from) && validDate($from)) {
         // repeating events stay relevant until their rule ends
         $sql .= ' AND (e.end_time >= ? OR (r.ID IS NOT NULL AND (r.end_date IS NULL OR r.end_date >= ?)))';
-        $params[] = $_GET['from'];
-        $params[] = $_GET['from'];
+        $params[] = $from;
+        $params[] = $from;
     }
-    if (!empty($_GET['to']) && validDate($_GET['to'])) {
+    if (!empty($to) && validDate($to)) {
         $sql .= ' AND e.start_time <= ?';
-        $params[] = $_GET['to'];
+        $params[] = $to;
     }
     $sql .= ' ORDER BY e.start_time ASC';
 

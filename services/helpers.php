@@ -83,10 +83,21 @@ function isParticipant(mysqli $conn, int $eventId, int $userId): bool {
 // Set the minutes it should be valid, when you call you update it with 30 minutes
 const USER_SESSION_MINUTES = 30;
 
-// the employee token from the X-User-Token header, or null
+// the employee token from the X-User-Token header or Authorization Bearer, or null
 function getUserToken(): ?string {
-    $token = trim($_SERVER['HTTP_X_USER_TOKEN'] ?? '');
-    return $token !== '' ? $token : null;
+    // Check custom header X-User-Token
+    if (!empty($_SERVER['HTTP_X_USER_TOKEN'])) {
+        return trim($_SERVER['HTTP_X_USER_TOKEN']);
+    }
+    
+    // Check standard Authorization Bearer header
+    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        $authHeader = trim($_SERVER['HTTP_AUTHORIZATION']);
+        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+            return trim($matches[1]);
+        }
+    }
+    return null;
 }
 
 // Issues a new token for an employee. Returns the token (only shows once) and when it expires.

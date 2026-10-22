@@ -1,11 +1,15 @@
 info:
   name: Ta bort
   type: http
-  seq: 4
+  seq: 5
 
 http:
   method: DELETE
-  url: https://gosapi.ddev.site/services/bloggapi.php
+  url: https://gosapi.ddev.site/services/bloggapi.php?id=1
+  params:
+    - name: id
+      value: "1"
+      type: query
   auth: inherit
 
 settings:

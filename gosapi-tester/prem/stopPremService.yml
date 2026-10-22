@@ -1,0 +1,20 @@
+info:
+  name: stopPremService
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{baseUrl}}prem/prem.php?action=deletePrem"
+  params:
+    - name: action
+      value: deletePrem
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

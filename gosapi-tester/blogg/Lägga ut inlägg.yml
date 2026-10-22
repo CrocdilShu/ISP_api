@@ -6,6 +6,13 @@ info:
 http:
   method: POST
   url: https://gosapi.ddev.site/services/bloggapi.php
+  body:
+    type: json
+    data: |-
+      {
+        "titel": "Ett nytt grymt inlägg3",
+        "comment": "hej sötis"
+      }
   auth: inherit
 
 settings:

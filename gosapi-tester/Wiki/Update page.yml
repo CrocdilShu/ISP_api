@@ -1,0 +1,23 @@
+info:
+  name: Update page
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{baseUrl}}pages.php?id=13"
+  params:
+    - name: id
+      value: "13"
+      type: query
+  body:
+    type: json
+    data: '{"titel":"New","content":"New text"}'
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

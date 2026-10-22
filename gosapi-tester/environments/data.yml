@@ -3,3 +3,6 @@ variables:
   - name: X-User-Token
     value: ""
     description: ""
+  - name: baseUrl
+    value: " https://gosapi.ddev.site/services/"
+    description: ""

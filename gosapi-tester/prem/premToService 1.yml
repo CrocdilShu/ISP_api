@@ -1,0 +1,20 @@
+info:
+  name: premToService
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{baseUrl}}prem/prem.php?action=sendPrem"
+  params:
+    - name: action
+      value: sendPrem
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

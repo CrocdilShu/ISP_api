@@ -10,17 +10,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../config/db.php';
-require_once __DIR__ . '/helpers.php'; // Inkludera Gustavs helpers!
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/common/PageModule.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 $inputData = json_decode(file_get_contents("php://input"), true);
 
+$blogModule = new PageModule($conn, 'blog');
+
 switch ($method) {
 
-    // --- GET: Hämta inlägg (Visar även författarens användarnamn) ---
+    // --- GET: Hämta inlägg (inklusive kommentarer om ett ID anges) ---
     case 'GET':
         if (isset($_GET['id'])) {
-            $id = $_GET['id'];
+            $id = (int)$_GET['id'];
+            
+            // Hämta inlägget via vår vanliga logik eller PageModule
             $stmt = $conn->prepare("
                 SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
                        p.titel, p.content, p.created_at, p.FORuser, u.username AS author
@@ -35,7 +40,12 @@ switch ($method) {
             $stmt->close();
 
             if ($post) {
-                $post['content'] = json_decode($post['content']);
+                $post['content'] = json_decode($post['content'], true);
+                
+                // Hämta tillhörande kommentarer via PageModule (använder page_id)[cite: 3]
+                $pageId = (int)$post['FORpage'];
+                $post['comments'] = $blogModule->getComments($pageId);
+
                 echo json_encode(["status" => "success", "data" => $post]);
             } else {
                 http_response_code(404);
@@ -52,7 +62,9 @@ switch ($method) {
             $posts = [];
             if ($result) {
                 while ($row = $result->fetch_assoc()) {
-                    $row['content'] = json_decode($row['content']);
+                    $row['content'] = json_decode($row['content'], true);
+                    // Valfritt: Vill man ha med kommentarer i listvyn eller bara på enskilt inlägg? 
+                    // Här kan man lägga till $row['comments'] = $blogModule->getComments((int)$row['FORpage']); om man vill.
                     $posts[] = $row;
                 }
             }
@@ -60,59 +72,67 @@ switch ($method) {
         }
         break;
 
-    // --- POST: Skapa nytt inlägg (Kräver inloggning) ---
+// --- POST: Skapa inlägg ELLER Skapa kommentar ---
     case 'POST':
-        // Kräver en giltig X-User-Token header, ger 401 automatiskt om token saknas/är ogiltig
         $actingUserId = requireActingUser($conn);
 
-        if (empty($inputData['titel']) || empty($inputData['content'])) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "Titel och innehåll krävs!"]);
+        // Om anropet gäller att kommentera (har skickat med 'comment' och antingen 'titel', 'blog_id' eller 'page_id')
+        if (isset($inputData['comment']) && (isset($inputData['titel']) || isset($inputData['blog_id']) || isset($inputData['page_id']))) {
+            
+            $res = null;
+
+            // 1. Sök på titel om det skickats med
+            if (!empty($inputData['titel'])) {
+                $stmtFind = $conn->prepare("
+                    SELECT pb.FORpage 
+                    FROM page_blog pb 
+                    JOIN page p ON pb.FORpage = p.ID 
+                    WHERE p.titel = ?
+                ");
+                $stmtFind->bind_param("s", $inputData['titel']);
+                $stmtFind->execute();
+                $res = $stmtFind->get_result()->fetch_assoc();
+                $stmtFind->close();
+            } 
+            // 2. Annars sök på ID (blog_id eller page_id)
+            else {
+                $blogOrPageId = $inputData['blog_id'] ?? $inputData['page_id'];
+                $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ? OR FORpage = ?");
+                $stmtFind->bind_param("ii", $blogOrPageId, $blogOrPageId);
+                $stmtFind->execute();
+                $res = $stmtFind->get_result()->fetch_assoc();
+                $stmtFind->close();
+            }
+
+            if (!$res) {
+                http_response_code(404);
+                echo json_encode(["status" => "error", "message" => "Inlägget hittades inte för kommentering"]);
+                break;
+            }
+
+            $pageId = (int)$res['FORpage'];
+            $commentText = $inputData['comment'];
+
+            try {
+                // Skapa kommentaren via PageModule
+                $commentId = $blogModule->addComment($pageId, $actingUserId, $commentText);
+
+                echo json_encode([
+                    "status" => "success",
+                    "message" => "Kommentar tillagd!",
+                    "data" => [
+                        "comment_id" => $commentId,
+                        "page_id" => $pageId,
+                        "user_id" => $actingUserId,
+                        "content" => $commentText
+                    ]
+                ]);
+            } catch (Exception $e) {
+                http_response_code(500);
+                echo json_encode(["status" => "error", "message" => "Kunde inte spara kommentar: " . $e->getMessage()]);
+            }
             break;
         }
-
-        $titel = $inputData['titel'];
-        $content = json_encode($inputData['content'], JSON_UNESCAPED_UNICODE);
-        $FORuser = $actingUserId; // Sätter automatiskt inloggad användare som författare!
-        $FORvisability = $inputData['FORvisability'] ?? 1;
-
-        $conn->begin_transaction();
-
-        try {
-            // 1. Skapa i 'page'
-            $stmtPage = $conn->prepare("INSERT INTO page (titel, content, FORuser) VALUES (?, ?, ?)");
-            $stmtPage->bind_param("ssi", $titel, $content, $FORuser);
-            $stmtPage->execute();
-            $pageId = $stmtPage->insert_id;
-            $stmtPage->close();
-
-            // 2. Skapa i 'page_blog'
-            $stmtBlog = $conn->prepare("INSERT INTO page_blog (FORpage, FORvisability) VALUES (?, ?)");
-            $stmtBlog->bind_param("ii", $pageId, $FORvisability);
-            $stmtBlog->execute();
-            $blogId = $stmtBlog->insert_id;
-            $stmtBlog->close();
-
-            $conn->commit();
-
-            echo json_encode([
-                "status" => "success",
-                "message" => "Inlägg skapat!",
-                "data" => [
-                    "blog_id" => $blogId,
-                    "page_id" => $pageId,
-                    "titel" => $titel,
-                    "content" => $inputData['content'],
-                    "FORvisability" => $FORvisability,
-                    "FORuser" => $FORuser
-                ]
-            ]);
-        } catch (Exception $e) {
-            $conn->rollback();
-            http_response_code(500);
-            echo json_encode(["status" => "error", "message" => "Kunde inte spara inlägg: " . $e->getMessage()]);
-        }
-        break;
 
     // --- PUT: Uppdatera inlägg ---
     case 'PUT':
@@ -120,17 +140,14 @@ switch ($method) {
 
         if (empty($inputData['id']) || empty($inputData['titel']) || empty($inputData['content'])) {
             http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "ID, titel och innehåll krävs!"]);
+            echo json_encode(["status" => "error", "message" => "ID, titel och innehåll krävs för uppdatering!"]);
             break;
         }
 
-        $blogId = $inputData['id'];
-        $titel = $inputData['titel'];
-        $content = json_encode($inputData['content'], JSON_UNESCAPED_UNICODE);
-        $FORvisability = $inputData['FORvisability'] ?? 1;
+        $blogOrPageId = $inputData['id'];
 
         $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ? OR FORpage = ?");
-        $stmtFind->bind_param("ii", $blogId, $blogId);
+        $stmtFind->bind_param("ii", $blogOrPageId, $blogOrPageId);
         $stmtFind->execute();
         $res = $stmtFind->get_result()->fetch_assoc();
         $stmtFind->close();
@@ -141,25 +158,27 @@ switch ($method) {
             break;
         }
 
-        $pageId = $res['FORpage'];
+        $pageId = (int)$res['FORpage'];
 
-        $conn->begin_transaction();
+        if (!$blogModule->canModify($pageId, $actingUserId, true)) {
+            http_response_code(403);
+            echo json_encode(["status" => "error", "message" => "Endast ägaren eller en administratör kan uppdatera detta inlägg"]);
+            break;
+        }
+
         try {
-            $stmtPage = $conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
-            $stmtPage->bind_param("ssi", $titel, $content, $pageId);
-            $stmtPage->execute();
-            $stmtPage->close();
+            $blogModule->updatePage($pageId, $inputData['titel'], $inputData['content'], $actingUserId);
 
-            $stmtBlog = $conn->prepare("UPDATE page_blog SET FORvisability = ? WHERE ID = ? OR FORpage = ?");
-            $stmtBlog->bind_param("iii", $FORvisability, $blogId, $blogId);
-            $stmtBlog->execute();
-            $stmtBlog->close();
-
-            $conn->commit();
+            if (isset($inputData['FORvisability'])) {
+                $visId = (int)$inputData['FORvisability'];
+                $stmtVis = $conn->prepare("UPDATE page_blog SET FORvisability = ? WHERE FORpage = ?");
+                $stmtVis->bind_param("ii", $visId, $pageId);
+                $stmtVis->execute();
+                $stmtVis->close();
+            }
 
             echo json_encode(["status" => "success", "message" => "Inlägget har uppdaterats!"]);
         } catch (Exception $e) {
-            $conn->rollback();
             http_response_code(500);
             echo json_encode(["status" => "error", "message" => "Kunde inte uppdatera: " . $e->getMessage()]);
         }
@@ -168,16 +187,16 @@ switch ($method) {
     // --- DELETE: Ta bort inlägg ---
     case 'DELETE':
         $actingUserId = requireActingUser($conn);
+        $blogOrPageId = $inputData['id'] ?? $_GET['id'] ?? null;
 
-        $blogId = $inputData['id'] ?? $_GET['id'] ?? null;
-        if (empty($blogId)) {
+        if (empty($blogOrPageId)) {
             http_response_code(400);
             echo json_encode(["status" => "error", "message" => "Inläggs-ID krävs för radering!"]);
             break;
         }
 
         $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ? OR FORpage = ?");
-        $stmtFind->bind_param("ii", $blogId, $blogId);
+        $stmtFind->bind_param("ii", $blogOrPageId, $blogOrPageId);
         $stmtFind->execute();
         $res = $stmtFind->get_result()->fetch_assoc();
         $stmtFind->close();
@@ -188,25 +207,24 @@ switch ($method) {
             break;
         }
 
-        $pageId = $res['FORpage'];
+        $pageId = (int)$res['FORpage'];
 
-        $conn->begin_transaction();
+        if (!$blogModule->canModify($pageId, $actingUserId, true)) {
+            http_response_code(403);
+            echo json_encode(["status" => "error", "message" => "Endast ägaren eller en administratör kan radera detta inlägg"]);
+            break;
+        }
+
         try {
-            $stmtBlog = $conn->prepare("DELETE FROM page_blog WHERE ID = ? OR FORpage = ?");
-            $stmtBlog->bind_param("ii", $blogId, $blogId);
-            $stmtBlog->execute();
-            $stmtBlog->close();
+            $stmtBlogDel = $conn->prepare("DELETE FROM page_blog WHERE FORpage = ?");
+            $stmtBlogDel->bind_param("i", $pageId);
+            $stmtBlogDel->execute();
+            $stmtBlogDel->close();
 
-            $stmtPage = $conn->prepare("DELETE FROM page WHERE ID = ?");
-            $stmtPage->bind_param("i", $pageId);
-            $stmtPage->execute();
-            $stmtPage->close();
-
-            $conn->commit();
+            $blogModule->deletePage($pageId);
 
             echo json_encode(["status" => "success", "message" => "Inlägget har raderats permanent!"]);
         } catch (Exception $e) {
-            $conn->rollback();
             http_response_code(500);
             echo json_encode(["status" => "error", "message" => "Kunde inte radera: " . $e->getMessage()]);
         }

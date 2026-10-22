@@ -2,7 +2,7 @@
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
+header("Access-Control-Allow-Headers: Content-Type, X-User-Token, Authorization");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -10,20 +10,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/helpers.php'; // Inkludera Gustavs helpers!
 
 $method = $_SERVER['REQUEST_METHOD'];
 $inputData = json_decode(file_get_contents("php://input"), true);
 
 switch ($method) {
 
-// --- GET: Hämta inlägg ---
+    // --- GET: Hämta inlägg (Visar även författarens användarnamn) ---
     case 'GET':
         if (isset($_GET['id'])) {
             $id = $_GET['id'];
             $stmt = $conn->prepare("
-                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, p.titel, p.content, p.created_at, p.FORuser 
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
+                       p.titel, p.content, p.created_at, p.FORuser, u.username AS author
                 FROM page_blog pb 
                 JOIN page p ON pb.FORpage = p.ID 
+                LEFT JOIN user u ON u.ID = p.FORuser
                 WHERE pb.ID = ? OR pb.FORpage = ?
             ");
             $stmt->bind_param("ii", $id, $id);
@@ -32,6 +35,7 @@ switch ($method) {
             $stmt->close();
 
             if ($post) {
+                $post['content'] = json_decode($post['content']);
                 echo json_encode(["status" => "success", "data" => $post]);
             } else {
                 http_response_code(404);
@@ -39,13 +43,16 @@ switch ($method) {
             }
         } else {
             $result = $conn->query("
-                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, p.titel, p.content, p.created_at, p.FORuser 
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
+                       p.titel, p.content, p.created_at, p.FORuser, u.username AS author
                 FROM page_blog pb 
                 JOIN page p ON pb.FORpage = p.ID
+                LEFT JOIN user u ON u.ID = p.FORuser
             ");
             $posts = [];
             if ($result) {
                 while ($row = $result->fetch_assoc()) {
+                    $row['content'] = json_decode($row['content']);
                     $posts[] = $row;
                 }
             }
@@ -53,8 +60,11 @@ switch ($method) {
         }
         break;
 
-    // --- POST: Skapa nytt inlägg i både page och page_blog ---
+    // --- POST: Skapa nytt inlägg (Kräver inloggning) ---
     case 'POST':
+        // Kräver en giltig X-User-Token header, ger 401 automatiskt om token saknas/är ogiltig
+        $actingUserId = requireActingUser($conn);
+
         if (empty($inputData['titel']) || empty($inputData['content'])) {
             http_response_code(400);
             echo json_encode(["status" => "error", "message" => "Titel och innehåll krävs!"]);
@@ -62,22 +72,21 @@ switch ($method) {
         }
 
         $titel = $inputData['titel'];
-        $content = $inputData['content'];
-        $FORuser = $inputData['FORuser'] ?? 1; 
+        $content = json_encode($inputData['content'], JSON_UNESCAPED_UNICODE);
+        $FORuser = $actingUserId; // Sätter automatiskt inloggad användare som författare!
         $FORvisability = $inputData['FORvisability'] ?? 1;
 
-        // Använd transaktion så att båda tabellerna sparas säkert ihop
         $conn->begin_transaction();
 
         try {
-            // 1. Skapa posten i 'page'
+            // 1. Skapa i 'page'
             $stmtPage = $conn->prepare("INSERT INTO page (titel, content, FORuser) VALUES (?, ?, ?)");
             $stmtPage->bind_param("ssi", $titel, $content, $FORuser);
             $stmtPage->execute();
             $pageId = $stmtPage->insert_id;
             $stmtPage->close();
 
-            // 2. Skapa kopplingen i 'page_blog'
+            // 2. Skapa i 'page_blog'
             $stmtBlog = $conn->prepare("INSERT INTO page_blog (FORpage, FORvisability) VALUES (?, ?)");
             $stmtBlog->bind_param("ii", $pageId, $FORvisability);
             $stmtBlog->execute();
@@ -93,7 +102,7 @@ switch ($method) {
                     "blog_id" => $blogId,
                     "page_id" => $pageId,
                     "titel" => $titel,
-                    "content" => $content,
+                    "content" => $inputData['content'],
                     "FORvisability" => $FORvisability,
                     "FORuser" => $FORuser
                 ]
@@ -107,20 +116,21 @@ switch ($method) {
 
     // --- PUT: Uppdatera inlägg ---
     case 'PUT':
+        $actingUserId = requireActingUser($conn);
+
         if (empty($inputData['id']) || empty($inputData['titel']) || empty($inputData['content'])) {
             http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "ID, titel och innehåll krävs för uppdatering!"]);
+            echo json_encode(["status" => "error", "message" => "ID, titel och innehåll krävs!"]);
             break;
         }
 
         $blogId = $inputData['id'];
         $titel = $inputData['titel'];
-        $content = $inputData['content'];
+        $content = json_encode($inputData['content'], JSON_UNESCAPED_UNICODE);
         $FORvisability = $inputData['FORvisability'] ?? 1;
 
-        // Hämta vilket page-ID som hör till blogg-ID:t
-        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ?");
-        $stmtFind->bind_param("i", $blogId);
+        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ? OR FORpage = ?");
+        $stmtFind->bind_param("ii", $blogId, $blogId);
         $stmtFind->execute();
         $res = $stmtFind->get_result()->fetch_assoc();
         $stmtFind->close();
@@ -135,24 +145,19 @@ switch ($method) {
 
         $conn->begin_transaction();
         try {
-            // Uppdatera 'page'
             $stmtPage = $conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
             $stmtPage->bind_param("ssi", $titel, $content, $pageId);
             $stmtPage->execute();
             $stmtPage->close();
 
-            // Uppdatera 'page_blog'
-            $stmtBlog = $conn->prepare("UPDATE page_blog SET FORvisability = ? WHERE ID = ?");
-            $stmtBlog->bind_param("ii", $FORvisability, $blogId);
+            $stmtBlog = $conn->prepare("UPDATE page_blog SET FORvisability = ? WHERE ID = ? OR FORpage = ?");
+            $stmtBlog->bind_param("iii", $FORvisability, $blogId, $blogId);
             $stmtBlog->execute();
             $stmtBlog->close();
 
             $conn->commit();
 
-            echo json_encode([
-                "status" => "success",
-                "message" => "Inlägget har uppdaterats!"
-            ]);
+            echo json_encode(["status" => "success", "message" => "Inlägget har uppdaterats!"]);
         } catch (Exception $e) {
             $conn->rollback();
             http_response_code(500);
@@ -162,6 +167,8 @@ switch ($method) {
 
     // --- DELETE: Ta bort inlägg ---
     case 'DELETE':
+        $actingUserId = requireActingUser($conn);
+
         $blogId = $inputData['id'] ?? $_GET['id'] ?? null;
         if (empty($blogId)) {
             http_response_code(400);
@@ -169,9 +176,8 @@ switch ($method) {
             break;
         }
 
-        // Hämta kopplat page-ID
-        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ?");
-        $stmtFind->bind_param("i", $blogId);
+        $stmtFind = $conn->prepare("SELECT FORpage FROM page_blog WHERE ID = ? OR FORpage = ?");
+        $stmtFind->bind_param("ii", $blogId, $blogId);
         $stmtFind->execute();
         $res = $stmtFind->get_result()->fetch_assoc();
         $stmtFind->close();
@@ -186,13 +192,11 @@ switch ($method) {
 
         $conn->begin_transaction();
         try {
-            // Radera från page_blog först
-            $stmtBlog = $conn->prepare("DELETE FROM page_blog WHERE ID = ?");
-            $stmtBlog->bind_param("i", $blogId);
+            $stmtBlog = $conn->prepare("DELETE FROM page_blog WHERE ID = ? OR FORpage = ?");
+            $stmtBlog->bind_param("ii", $blogId, $blogId);
             $stmtBlog->execute();
             $stmtBlog->close();
 
-            // Radera från page
             $stmtPage = $conn->prepare("DELETE FROM page WHERE ID = ?");
             $stmtPage->bind_param("i", $pageId);
             $stmtPage->execute();
@@ -200,10 +204,7 @@ switch ($method) {
 
             $conn->commit();
 
-            echo json_encode([
-                "status" => "success",
-                "message" => "Inlägget har raderats permanent!"
-            ]);
+            echo json_encode(["status" => "success", "message" => "Inlägget har raderats permanent!"]);
         } catch (Exception $e) {
             $conn->rollback();
             http_response_code(500);

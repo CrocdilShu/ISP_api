@@ -1,0 +1,16 @@
+info:
+  name: deletePrem
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{baseUrl}}prem/prem.php/action=deletePrem"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

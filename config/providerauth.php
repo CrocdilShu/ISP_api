@@ -7,17 +7,42 @@ define('SERVICE_CALENDAR', 1);
 define('SERVICE_BLOG', 2);
 define('SERVICE_WIKI', 4);
 
+// Define session duration extension
+const PROVIDER_SESSION_MINUTES = 30;
+
 function getRequestSessionKey(): ?string {
+    // Check query parameter
     if (!empty($_GET['session_key'])) {
         return trim($_GET['session_key']);
     }
+    
+    // Check custom header X-Session-Key
     if (!empty($_SERVER['HTTP_X_SESSION_KEY'])) {
         return trim($_SERVER['HTTP_X_SESSION_KEY']);
     }
+    
+    // Check standard Authorization Bearer header
+    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        $authHeader = trim($_SERVER['HTTP_AUTHORIZATION']);
+        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+            return trim($matches[1]);
+        }
+    }
+
+    // Fallback redirect authorization
+    if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+        $authHeader = trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
+            return trim($matches[1]);
+        }
+    }
+
+    // Check JSON body
     $input = json_decode(file_get_contents('php://input'), true);
     if (is_array($input) && !empty($input['session_key'])) {
         return trim($input['session_key']);
     }
+    
     return null;
 }
 
@@ -30,7 +55,7 @@ function verifySessionWithProvider(?string $sessionKey): ?array {
     if ($ch === null) {
         $ch = curl_init(PROVIDER_VERIFY_URL);
         curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
+            CURLOPT_POST          => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
@@ -56,7 +81,33 @@ function verifySessionWithProvider(?string $sessionKey): ?array {
     return $data;
 }
 
+
+// Updates the session expiration in the root_user table by 30 minutes from now.
+function touchProviderSession(mysqli $conn, string $sessionKey): void {
+    // Clean up expired sessions first based on your 'expire_date' column
+    run($conn, 'DELETE FROM root_user WHERE expire_date < NOW()');
+
+    // Check if this token already exists in the table
+    $existing = fetchOne($conn, 'SELECT ID FROM root_user WHERE token = ?', [$sessionKey]);
+
+    if ($existing) {
+        // Extend the expiration by 30 minutes from right now
+        run(
+            $conn,
+            'UPDATE root_user 
+                SET expire_date = DATE_ADD(NOW(), INTERVAL ? MINUTE) 
+                WHERE token = ?',
+            [PROVIDER_SESSION_MINUTES, $sessionKey]
+        );
+    }
+}
+
 function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$userId = null): bool {
+    if (!$sessionKey) {
+        return false;
+    }
+
+    // 1. Verify with the external provider first
     $data = verifySessionWithProvider($sessionKey);
     if (!$data) {
         return false;
@@ -65,5 +116,15 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
     $userId = isset($data['user_id']) ? (int)$data['user_id'] : null;
     $services = isset($data['services']) ? (int)$data['services'] : 0;
 
-    return (($services & $requiredServiceBit) === $requiredServiceBit);
+    // Check if the service bit matches
+    if (($services & $requiredServiceBit) !== $requiredServiceBit) {
+        return false;
+    }
+
+    // If a database connection is available, extend the session expiration in root_user by 30 min
+    if (isset($GLOBALS['conn']) && $GLOBALS['conn'] instanceof mysqli) {
+        touchProviderSession($GLOBALS['conn'], $sessionKey);
+    }
+
+    return true;
 }

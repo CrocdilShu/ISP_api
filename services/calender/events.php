@@ -5,23 +5,30 @@ if (!defined('CALENDER_API')) {
     exit;
 }
 
-// Events: getEvents, createNewEvent, editEvent
+// Events: getEvents, createNewEvent, editEvent, deleteEvent
 
 // ---------------------------------------------------------------
-// GET getEvents
+// POST getEvents
 // optional: ?from=...&to=...  (Y-m-d H:i:s)
-//           ?user_id=5        (only events that employee takes part in)
+//           ?user_id=5         (only events that employee takes part in)
 // returns ALL events of the company unless user_id is given.
 // Repeating events are returned ONCE (first occurrence + rule),
 // the client expands the repeats.
 // ---------------------------------------------------------------
 function getEvents(mysqli $conn): void {
-    requireMethod('GET');
+    requireMethod('POST');
+
+    // Läs JSON-data från request body
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+
+    $userId = $input['user_id'] ?? null;
+    $from   = $input['from'] ?? null;
+    $to     = $input['to'] ?? null;
 
     $sql = 'SELECT e.ID, e.start_time, e.end_time, e.created_at, e.FORrecurrence,
-                   pg.titel AS title, pg.content,
-                   pg.FORuser AS owner_id, o.username AS owner_username,
-                   r.frequency, r.interval_step, r.end_date AS recurrence_end_date
+                pg.titel AS title, pg.content,
+                pg.FORuser AS owner_id, o.username AS owner_username,
+                r.frequency, r.interval_step, r.end_date AS recurrence_end_date
             FROM calender_event e
             JOIN page pg ON pg.ID = e.ID
             LEFT JOIN user o ON o.ID = pg.FORuser
@@ -29,20 +36,20 @@ function getEvents(mysqli $conn): void {
             WHERE 1 = 1';
     $params = [];
 
-    if (!empty($_GET['user_id'])) {
+    if (!empty($userId)) {
         $sql .= ' AND EXISTS (SELECT 1 FROM participant p
-                              WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
-        $params[] = (int)$_GET['user_id'];
+            WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
+        $params[] = (int)$userId;
     }
-    if (!empty($_GET['from']) && validDate($_GET['from'])) {
+    if (!empty($from) && validDate($from)) {
         // repeating events stay relevant until their rule ends
         $sql .= ' AND (e.end_time >= ? OR (r.ID IS NOT NULL AND (r.end_date IS NULL OR r.end_date >= ?)))';
-        $params[] = $_GET['from'];
-        $params[] = $_GET['from'];
+        $params[] = $from;
+        $params[] = $from;
     }
-    if (!empty($_GET['to']) && validDate($_GET['to'])) {
+    if (!empty($to) && validDate($to)) {
         $sql .= ' AND e.start_time <= ?';
-        $params[] = $_GET['to'];
+        $params[] = $to;
     }
     $sql .= ' ORDER BY e.start_time ASC';
 
@@ -59,15 +66,13 @@ function getEvents(mysqli $conn): void {
 // ---------------------------------------------------------------
 // POST createNewEvent
 // body: {
-//   "title": "Team meeting",            (required, max 255 characters)
+//   "title": "Team meeting",              (required, max 255 characters)
 //   "content": { ... },                 (optional, any JSON, stored in page.content)
 //   "start_time": "2026-10-20 10:00:00",
 //   "end_time": "2026-10-20 11:00:00",
 //   "recurrence": {"frequency":"weekly","interval_step":1,"end_date":null},   (optional)
-//   "participants": [2,3]               (optional, employee ids from the user table)
+//   "participants": [2, "bob@test.com"]   (optional, employee IDs or emails)
 // }
-// An event is a page row (owner = page.FORuser) plus a calender_event row that
-// reuses the page's id. The owner is also added as a participant.
 // ---------------------------------------------------------------
 function createNewEvent(mysqli $conn): void {
     requireMethod('POST');
@@ -95,8 +100,8 @@ function createNewEvent(mysqli $conn): void {
         $recurrence = validateRecurrence($body['recurrence']);
     }
 
-    $participants = is_array($body['participants'] ?? null) ? $body['participants'] : [];
-    $userIds = cleanUserIds(array_merge([$ownerId], $participants));
+    $rawParticipants = is_array($body['participants'] ?? null) ? $body['participants'] : [];
+    $userIds = resolveParticipants($conn, array_merge([$ownerId], $rawParticipants));
     requireUsersExist($conn, $userIds);
 
     try {
@@ -129,19 +134,14 @@ function createNewEvent(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT editEvent (POST also accepted)   (owner only)
-// body: {"event_id":1,
-//        "title":"...", "content":{...}, "start_time":"...", "end_time":"...",
-//        "recurrence": {"frequency":"daily","interval_step":2,"end_date":null}}
-// only send the fields you want to change
-// "recurrence": null  -> makes the event non-repeating
-// "content": null     -> clears the description
+// body: {"title": "Team meeting", "creator_email": "alice@test.com", ...}
+// (or {"event_id": 1, ...})
 // ---------------------------------------------------------------
 function editEvent(mysqli $conn): void {
     requireMethod('PUT', 'POST');
     $body = getBody();
 
-    $eventId = (int)($body['event_id'] ?? 0);
-    if ($eventId <= 0) respond(400, ['error' => 'event_id is required']);
+    $eventId = resolveEventId($conn, $body);
     requireOwner($conn, $eventId);
 
     $current = fetchOne(
@@ -226,5 +226,49 @@ function editEvent(mysqli $conn): void {
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
         respond(500, ['error' => 'could not update event']);
+    }
+}
+
+// ---------------------------------------------------------------
+// DELETE deleteEvent
+// Deletes a calendar event and its underlying page.
+// body: {"title": "Team meeting", "creator_email": "alice@test.com"} (or {"event_id": 1})
+// ---------------------------------------------------------------
+function deleteEvent(mysqli $conn): void {
+    requireMethod('DELETE', 'POST');
+
+    // Authenticate user via session token
+    $userId = actingUserId($conn);
+    if ($userId === 0) {
+        respond(401, ['error' => 'unauthorized or invalid user token']);
+    }
+
+    $body = getBody();
+    $params = !empty($body) ? $body : $_GET;
+    $eventId = resolveEventId($conn, $params);
+
+    // Check if the calendar event exists
+    $event = fetchOne($conn, 'SELECT ID FROM calender_event WHERE ID = ?', [$eventId]);
+    if (!$event) {
+        respond(404, ['error' => 'event not found']);
+    }
+
+    // Check ownership (from the page table) or user role (admin/root_admin)
+    $page = fetchOne($conn, 'SELECT FORuser FROM page WHERE ID = ?', [$eventId]);
+    $userRole = fetchOne($conn, 'SELECT r.role_name FROM user u JOIN role r ON r.ID = u.FORrole WHERE u.ID = ?', [$userId]);
+
+    $isAdmin = in_array($userRole['role_name'] ?? '', ['admin', 'root_admin'], true);
+    $isOwner = ((int)($page['FORuser'] ?? 0) === $userId);
+
+    if (!$isOwner && !$isAdmin) {
+        respond(403, ['error' => 'you do not have permission to delete this event']);
+    }
+
+    try {
+        // Deleting the page row automatically deletes the calender_event due to ON DELETE CASCADE
+        run($conn, 'DELETE FROM page WHERE ID = ?', [$eventId]);
+        respond(200, ['message' => 'event deleted successfully']);
+    } catch (mysqli_sql_exception $e) {
+        respond(500, ['error' => 'could not delete the event']);
     }
 }

@@ -1,4 +1,5 @@
 <?php
+define('COMPANY_ID', 1);
 // Go up one directory from __DIR__ to find the .env file in the parent folder
 $envPath = dirname(__DIR__) . '/.env';
 $env = parse_ini_file($envPath);

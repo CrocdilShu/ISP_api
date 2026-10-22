@@ -17,7 +17,7 @@ config:
 request:
   auth:
     type: bearer
-    token: "{{X-Session-Token}} {{X-User-Token}}"
+    token: "{{X-User-Token}}"
 bundled: false
 extensions:
   bruno:

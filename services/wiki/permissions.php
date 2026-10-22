@@ -13,44 +13,34 @@ $providerAccountId = null;
 $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
 
 $wiki = new PageModule($conn, 'wiki');
-$userId = null;
-if ($hasWikiAccess) {
-    try {
-        $userId = $wiki->resolveRequestUser($sessionKey, $providerAccountId ? (int)$providerAccountId : null);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte synkronisera lokal användare: ' . $e->getMessage()]);
-        exit;
-    }
-}
+$userId = $hasWikiAccess ? $wiki->resolveRequestUser() : null;
 
 if ((!$hasWikiAccess) or (!$userId)) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Inloggning krävs för att hantera sidrättigheter']);
+    http_response_code(401);
+    echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
 
-// 1. GET: Lista alla rättigheter för en sida (?page_id=13 eller ?id=13)
-//    Endast den som får se sidan får se vem som har rättigheter på den.
+// 1. GET: Lista alla rättigheter för en sida (?page_id=13)
 if ($method === 'GET') {
     $pageId = isset($_GET['page_id']) ? (int)$_GET['page_id'] : (isset($_GET['id']) ? (int)$_GET['id'] : 0);
 
     if (!$pageId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Ange ?page_id=X i URL:en']);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
     $page = $wiki->getPage($pageId);
     if (!$page) {
         http_response_code(404);
-        echo json_encode(['error' => 'Wiki-sidan hittades inte']);
+        echo json_encode(['error' => 'Not found']);
         exit;
     }
 
     if (!$wiki->canViewPage($page, (int)$userId)) {
         http_response_code(403);
-        echo json_encode(['error' => 'Du har inte behörighet till denna privata wiki']);
+        echo json_encode(['error' => 'Forbidden']);
         exit;
     }
 
@@ -78,8 +68,10 @@ if ($method === 'GET') {
     $pagePermissions = $stmtPerm->get_result()->fetch_all(MYSQLI_ASSOC);
 
     echo json_encode([
+        'success' => true,
         'page_id' => $pageId,
         'owner_id' => (int)$page['owner_id'],
+        'owner_username' => $page['owner_username'],
         'acting_user_id' => (int)$userId,
         'editors' => $editors,
         'permissions' => $pagePermissions
@@ -87,7 +79,7 @@ if ($method === 'GET') {
     exit;
 }
 
-// 2. POST: Lägg till editor eller delägare (co_owner) på en wiki-sida
+// 2. POST: Lägg till editor, co_owner ELLER (endast för Admin) ge owner till en annan person
 if ($method === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -99,38 +91,61 @@ if ($method === 'POST') {
 
     if ((!$pageId) or (!$targetUserId)) {
         http_response_code(400);
-        echo json_encode(['error' => 'page_id och user_id krävs']);
-        exit;
-    }
-
-    // Endast tillåtna sidroller (huvudägarskapet kan aldrig ges bort)
-    $allowedPageRoles = ['editor', 'co_owner'];
-    if (!in_array($permRole, $allowedPageRoles, true)) {
-        http_response_code(400);
-        echo json_encode([
-            'error' => 'Ogiltig sidroll. Tillåtna värden är "editor" eller "co_owner" (huvudägarskap kan inte tas över).'
-        ]);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
     $page = $wiki->getPage($pageId);
     if (!$page) {
         http_response_code(404);
-        echo json_encode(['error' => 'Wiki-sidan hittades inte']);
+        echo json_encode(['error' => 'Not found']);
         exit;
     }
 
-    // Huvudägare, co_owner eller admin/root_admin
+    if (!$wiki->userExists($targetUserId)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid user']);
+        exit;
+    }
+
+    // Specialfall: Admin / Root Admin vill ge 'owner' (huvudägarskap) till en annan användare
+    if ($permRole === 'owner') {
+        if (!$wiki->isAdmin((int)$userId)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            exit;
+        }
+        try {
+            $wiki->transferPageOwnership($pageId, $targetUserId);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Ownership transferred',
+                'page_id' => $pageId,
+                'new_owner_id' => $targetUserId
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Request could not be completed']);
+        }
+        exit;
+    }
+
+    $allowedPageRoles = ['editor', 'co_owner'];
+    if (!in_array($permRole, $allowedPageRoles, true)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid role']);
+        exit;
+    }
+
     if (!$wiki->canManagePermissions($pageId, (int)$userId)) {
         http_response_code(403);
-        echo json_encode(['error' => 'Endast sidans ägare eller admin kan lägga till rättigheter']);
+        echo json_encode(['error' => 'Forbidden']);
         exit;
     }
 
-    // Skydda huvudägaren
     if ((int)$page['owner_id'] === $targetUserId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Användaren är redan sidans huvudägare. Huvudägarskapet kan inte ändras eller tas över.']);
+        echo json_encode(['error' => 'Invalid user']);
         exit;
     }
 
@@ -138,8 +153,6 @@ if ($method === 'POST') {
 
     $conn->begin_transaction();
     try {
-        $wiki->ensureLocalUser($targetUserId);
-
         $stmtCheckEd = $conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
         $stmtCheckEd->bind_param("ii", $wikiId, $targetUserId);
         $stmtCheckEd->execute();
@@ -181,17 +194,20 @@ if ($method === 'POST') {
         http_response_code(201);
         echo json_encode([
             'success' => true,
-            'message' => "Användare $targetUserId har fått sidbehörigheten '$permRole' på sida $pageId"
+            'message' => 'Permission granted',
+            'page_id' => $pageId,
+            'user_id' => $targetUserId,
+            'role' => $permRole
         ]);
     } catch (Exception $e) {
         $conn->rollback();
         http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte spara rättigheter: ' . $e->getMessage()]);
+        echo json_encode(['error' => 'Request could not be completed']);
     }
     exit;
 }
 
-// 3. DELETE: Ta bort en användares rättigheter från en wiki-sida
+// 3. DELETE: Ta bort rättighet ELLER ta bort ownership (co_owner blir ny owner, annars deleted_user)
 if ($method === 'DELETE') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -199,30 +215,55 @@ if ($method === 'DELETE') {
     }
     $pageId = isset($_GET['page_id']) ? (int)$_GET['page_id'] : (int)($input['page_id'] ?? ($_GET['id'] ?? 0));
     $targetUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : (int)($input['user_id'] ?? 0);
+    $removeOwnership = !empty($_GET['remove_ownership']) || !empty($input['remove_ownership']);
 
-    if ((!$pageId) or (!$targetUserId)) {
+    if (!$pageId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Ange page_id och user_id (?page_id=X&user_id=Y)']);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
     $page = $wiki->getPage($pageId);
     if (!$page) {
         http_response_code(404);
-        echo json_encode(['error' => 'Wiki-sidan hittades inte']);
+        echo json_encode(['error' => 'Not found']);
+        exit;
+    }
+
+    $ownerId = (int)$page['owner_id'];
+
+    if ($removeOwnership || ($targetUserId > 0 && $targetUserId === $ownerId)) {
+        if ((int)$userId !== $ownerId && !$wiki->isAdmin((int)$userId)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            exit;
+        }
+
+        try {
+            $transfer = $wiki->removePageOwnership($pageId);
+            echo json_encode([
+                'success' => true,
+                'message' => 'Ownership removed',
+                'page_id' => $pageId,
+                'new_owner_id' => $transfer['new_owner_id'],
+                'assigned_via' => $transfer['promoted_from']
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Request could not be completed']);
+        }
+        exit;
+    }
+
+    if (!$targetUserId) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
     if (!$wiki->canManagePermissions($pageId, (int)$userId)) {
         http_response_code(403);
-        echo json_encode(['error' => 'Endast sidans ägare eller admin kan ta bort sidrättigheter']);
-        exit;
-    }
-
-    // Huvudägaren kan aldrig tas bort från sin egen sida
-    if ((int)$page['owner_id'] === $targetUserId) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Sidans huvudägare kan inte tas bort']);
+        echo json_encode(['error' => 'Forbidden']);
         exit;
     }
 
@@ -241,15 +282,17 @@ if ($method === 'DELETE') {
         $conn->commit();
         echo json_encode([
             'success' => true,
-            'message' => "Rättigheter för användare $targetUserId har tagits bort från sida $pageId"
+            'message' => 'Permission removed',
+            'page_id' => $pageId,
+            'user_id' => $targetUserId
         ]);
     } catch (Exception $e) {
         $conn->rollback();
         http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte ta bort rättigheter: ' . $e->getMessage()]);
+        echo json_encode(['error' => 'Request could not be completed']);
     }
     exit;
 }
 
 http_response_code(405);
-echo json_encode(['error' => 'Metoden stöds inte']);
+echo json_encode(['error' => 'Method not allowed']);

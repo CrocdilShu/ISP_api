@@ -13,85 +13,119 @@ $providerAccountId = null;
 $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
 
 $wiki = new PageModule($conn, 'wiki');
-$userId = null;
-if ($hasWikiAccess) {
-    try {
-        $userId = $wiki->resolveRequestUser($sessionKey, $providerAccountId ? (int)$providerAccountId : null);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte synkronisera lokal användare: ' . $e->getMessage()]);
-        exit;
-    }
-}
+$userId = $hasWikiAccess ? $wiki->resolveRequestUser() : null;
 
 if ((!$hasWikiAccess) or (!$userId)) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Inloggning krävs för att hantera administratörer']);
+    http_response_code(401);
+    echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
 
 $currentUserRole = $wiki->getUserRole((int)$userId);
+$isAdmin = ($currentUserRole === 'admin' || $currentUserRole === 'root_admin');
 
-// 1. GET: Lista alla admins och root_admins (e-post visas bara för admins)
+// 1. GET: Lista admins eller sök användare via bokstäver (?search=abc&sort=ASC|DESC)
 if ($method === 'GET') {
-    $result = $conn->query("
-        SELECT u.ID AS user_id, u.username, u.email, r.role_name
-        FROM `user` u
-        JOIN role r ON u.FORrole = r.ID
-        WHERE r.role_name IN ('admin', 'root_admin')
-        ORDER BY r.ID DESC, u.ID ASC
-    ");
-    $admins = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+    $search = trim((string)($_GET['search'] ?? ''));
+    $order = strtoupper(trim((string)($_GET['sort'] ?? 'ASC'))) === 'DESC' ? 'DESC' : 'ASC';
 
-    if ($currentUserRole !== 'admin' && $currentUserRole !== 'root_admin') {
-        foreach ($admins as &$a) {
-            unset($a['email']);
+    if ($search !== '') {
+        $like = '%' . $search . '%';
+        $stmt = $conn->prepare("
+            SELECT u.ID AS user_id, u.username, u.email, r.role_name
+            FROM `user` u
+            JOIN role r ON u.FORrole = r.ID
+            WHERE u.username <> 'deleted_user' AND (u.username LIKE ? OR u.email LIKE ?)
+            ORDER BY u.username $order
+        ");
+        $stmt->bind_param("ss", $like, $like);
+        $stmt->execute();
+        $users = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    } else {
+        $result = $conn->query("
+            SELECT u.ID AS user_id, u.username, u.email, r.role_name
+            FROM `user` u
+            JOIN role r ON u.FORrole = r.ID
+            WHERE r.role_name IN ('admin', 'root_admin') AND u.username <> 'deleted_user'
+            ORDER BY u.username $order
+        ");
+        $users = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+    }
+
+    if (!$isAdmin) {
+        foreach ($users as &$u) {
+            unset($u['email']);
         }
-        unset($a);
+        unset($u);
     }
 
     echo json_encode([
+        'success' => true,
         'current_user_id' => (int)$userId,
         'current_user_role' => $currentUserRole,
-        'admins' => $admins
+        'count' => count($users),
+        'users' => $users
     ]);
     exit;
 }
 
-// Endast root_admin får utse eller ta bort andra admins
-if ($currentUserRole !== 'root_admin') {
-    http_response_code(403);
-    echo json_encode([
-        'error' => 'Endast root_admin har behörighet att lägga till eller ta bort administratörer',
-        'your_role' => $currentUserRole
-    ]);
-    exit;
-}
-
-// 2. POST: Gör en användare till admin (eller root_admin)
+// 2. POST: Ändra roll (root_admin kan sätta admin/root_admin/banned, vanlig admin kan sätta banned på vanliga users)
 if ($method === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
         $input = [];
     }
     $targetUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : (int)($input['user_id'] ?? 0);
-    $newRoleName = $input['role'] ?? 'admin';
+    $newRoleName = strtolower(trim((string)($input['role'] ?? 'admin')));
 
-    if (!$targetUserId) {
+    if (!$targetUserId || $targetUserId === (int)$userId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Ange user_id i JSON-body eller som ?user_id=X']);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
-    if (($newRoleName !== 'admin') and ($newRoleName !== 'root_admin')) {
+    // Om någon bannlyses -> överför alla deras wikisidor till co_owner (eller deleted_user)
+    if ($newRoleName === 'banned') {
+        if (!$isAdmin) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            exit;
+        }
+        $targetRole = $wiki->getUserRole($targetUserId);
+        if ($targetRole === 'root_admin' || ($targetRole === 'admin' && $currentUserRole !== 'root_admin')) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            exit;
+        }
+
+        try {
+            $transferredCount = $wiki->banUserAndTransferWikis($targetUserId);
+            echo json_encode([
+                'success' => true,
+                'message' => 'User banned and wiki ownership transferred',
+                'user_id' => $targetUserId,
+                'transferred_pages' => $transferredCount
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Request could not be completed']);
+        }
+        exit;
+    }
+
+    if ($currentUserRole !== 'root_admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden']);
+        exit;
+    }
+
+    if (($newRoleName !== 'admin') && ($newRoleName !== 'root_admin')) {
         http_response_code(400);
-        echo json_encode(['error' => 'Ogiltig roll. Använd "admin" eller "root_admin"']);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
     try {
-        $wiki->ensureLocalUser($targetUserId);
-
         $stmtGetRole = $conn->prepare("SELECT ID FROM role WHERE role_name = ?");
         $stmtGetRole->bind_param("s", $newRoleName);
         $stmtGetRole->execute();
@@ -103,34 +137,36 @@ if ($method === 'POST') {
         $stmtUpd->execute();
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte ändra roll: ' . $e->getMessage()]);
+        echo json_encode(['error' => 'Request could not be completed']);
         exit;
     }
 
     echo json_encode([
         'success' => true,
-        'message' => "Användare $targetUserId har nu rollen '$newRoleName'"
+        'message' => 'Role updated',
+        'user_id' => $targetUserId,
+        'role' => $newRoleName
     ]);
     exit;
 }
 
 // 3. DELETE: Ta bort admin-behörighet (återställ till 'user')
 if ($method === 'DELETE') {
+    if ($currentUserRole !== 'root_admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden']);
+        exit;
+    }
+
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
         $input = [];
     }
     $targetUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : (int)($input['user_id'] ?? 0);
 
-    if (!$targetUserId) {
+    if (!$targetUserId || $targetUserId === (int)$userId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Ange ?user_id=X i URL:en eller i JSON-body']);
-        exit;
-    }
-
-    if ($targetUserId === (int)$userId) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Du kan inte ta bort din egen root_admin-roll']);
+        echo json_encode(['error' => 'Invalid input']);
         exit;
     }
 
@@ -144,16 +180,18 @@ if ($method === 'DELETE') {
         $stmtUpd->execute();
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte ändra roll: ' . $e->getMessage()]);
+        echo json_encode(['error' => 'Request could not be completed']);
         exit;
     }
 
     echo json_encode([
         'success' => true,
-        'message' => "Admin-rollen har tagits bort från användare $targetUserId (återställd till 'user')"
+        'message' => 'Role updated',
+        'user_id' => $targetUserId,
+        'role' => 'user'
     ]);
     exit;
 }
 
 http_response_code(405);
-echo json_encode(['error' => 'Metoden stöds inte']);
+echo json_encode(['error' => 'Method not allowed']);

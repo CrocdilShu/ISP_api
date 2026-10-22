@@ -13,26 +13,17 @@ $providerAccountId = null;
 $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
 
 $wiki = new PageModule($conn, 'wiki');
-$userId = null;
-if ($hasWikiAccess) {
-    try {
-        $userId = $wiki->resolveRequestUser($sessionKey, $providerAccountId ? (int)$providerAccountId : null);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Kunde inte synkronisera lokal användare: ' . $e->getMessage()]);
-        exit;
-    }
-}
+$userId = $hasWikiAccess ? $wiki->resolveRequestUser() : null;
 
 if ((!$hasWikiAccess) or (!$userId)) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Inloggning krävs för att se versionshistorik']);
+    http_response_code(401);
+    echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
 
 if ($method !== 'GET') {
     http_response_code(405);
-    echo json_encode(['error' => 'Metoden stöds inte. Använd GET.']);
+    echo json_encode(['error' => 'Method not allowed']);
     exit;
 }
 
@@ -40,8 +31,6 @@ $viewerId = (int)$userId;
 $isAdmin = $wiki->isAdmin($viewerId);
 $pageAccessCache = [];
 
-// Får användaren se denna historikpost? Admin: alla. Annars: egna ändringar, eller poster
-// för sidor användaren har läsrätt till (privata sidors gamla innehåll läcker inte).
 $canSeeEntry = function (array $row) use ($wiki, $viewerId, $isAdmin, &$pageAccessCache): bool {
     if ($isAdmin || (int)$row['edited_by_id'] === $viewerId) {
         return true;
@@ -58,8 +47,10 @@ $canSeeEntry = function (array $row) use ($wiki, $viewerId, $isAdmin, &$pageAcce
 
 $historyId = isset($_GET['id']) ? (int)$_GET['id'] : null;
 $filterUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : null;
+$filterPageId = isset($_GET['page_id']) ? (int)$_GET['page_id'] : null;
+$order = strtoupper(trim((string)($_GET['sort'] ?? 'DESC'))) === 'ASC' ? 'ASC' : 'DESC';
 
-// 1. En specifik historikpost via ?id=X
+// 1. Specifik historikpost (?id=X)
 if ($historyId) {
     $stmt = $conn->prepare("
         SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
@@ -74,7 +65,7 @@ if ($historyId) {
 
     if (!$entry) {
         http_response_code(404);
-        echo json_encode(['error' => 'Historikposten hittades inte']);
+        echo json_encode(['error' => 'Not found']);
         exit;
     }
 
@@ -82,15 +73,15 @@ if ($historyId) {
 
     if (!$canSeeEntry($entry)) {
         http_response_code(403);
-        echo json_encode(['error' => 'Du har inte behörighet att se denna historikpost']);
+        echo json_encode(['error' => 'Forbidden']);
         exit;
     }
 
-    echo json_encode($entry);
+    echo json_encode(['success' => true, 'entry' => $entry]);
     exit;
 }
 
-// 2. Filtrera på användare via ?user_id=X, annars 3. all historik (senaste först)
+// 2. Lista historik
 if ($filterUserId) {
     $stmt = $conn->prepare("
         SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
@@ -98,7 +89,7 @@ if ($filterUserId) {
         FROM update_history h
         JOIN `user` u ON h.FORuser = u.ID
         WHERE h.FORuser = ?
-        ORDER BY h.update_at DESC
+        ORDER BY h.update_at $order
     ");
     $stmt->bind_param("i", $filterUserId);
     $stmt->execute();
@@ -109,7 +100,7 @@ if ($filterUserId) {
                h.FORuser AS edited_by_id, u.username AS edited_by_username
         FROM update_history h
         JOIN `user` u ON h.FORuser = u.ID
-        ORDER BY h.update_at DESC
+        ORDER BY h.update_at $order
     ");
     $res = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
 }
@@ -117,9 +108,19 @@ if ($filterUserId) {
 $visible = [];
 foreach ($res as $row) {
     $row['old_text'] = json_decode($row['old_text'], true);
+    if ($filterPageId) {
+        $entryPageId = is_array($row['old_text']) ? (int)($row['old_text']['_page_id'] ?? 0) : 0;
+        if ($entryPageId !== $filterPageId) {
+            continue;
+        }
+    }
     if ($canSeeEntry($row)) {
         $visible[] = $row;
     }
 }
 
-echo json_encode($visible);
+echo json_encode([
+    'success' => true,
+    'count' => count($visible),
+    'history' => $visible
+]);

@@ -239,7 +239,153 @@ function cleanupRecurrence(mysqli $conn, ?int $recurrenceId): void {
     run(
         $conn,
         'DELETE FROM recurrence WHERE ID = ?
-         AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
+            AND NOT EXISTS (SELECT 1 FROM calender_event WHERE FORrecurrence = ?)',
         [$recurrenceId, $recurrenceId]
     );
+}
+
+// Cleans, deduplicates, and resolves an array of emails to user IDs.
+// Automatically responds with 400 if any emails are missing from the database.
+function resolveUserIdsFromEmails(mysqli $conn, array $rawEmails): array {
+    if (!is_array($rawEmails)) return [];
+    
+    $emails = array_values(array_unique(array_filter(array_map('trim', $rawEmails))));
+    if (empty($emails)) return [];
+
+    $in = implode(',', array_fill(0, count($emails), '?'));
+    $rows = fetchAll($conn, "SELECT ID, email FROM user WHERE email IN ($in)", $emails);
+
+    $foundMap = [];
+    foreach ($rows as $row) {
+        $foundMap[$row['email']] = (int)$row['ID'];
+    }
+
+    $missing = [];
+    $userIds = [];
+    foreach ($emails as $email) {
+        if (isset($foundMap[$email])) {
+            $userIds[] = $foundMap[$email];
+        } else {
+            $missing[] = $email;
+        }
+    }
+
+    if ($missing) {
+        respond(400, ['error' => 'unknown user emails', 'unknown_emails' => $missing]);
+    }
+
+    return $userIds;
+}
+
+// Safely encodes plain text into the required JSON format to satisfy check constraints (e.g., comment_chk_1)
+function jsonContent(string $text): string {
+    return json_encode(['text' => $text]);
+}
+
+// 1. Resolves an event ID from a request body or parameters using either:
+//    - An explicit "event_id"
+//    - A combination of "title" (or "titel") and "creator_email" (or "email")
+function resolveEventId(mysqli $conn, array $data): int {
+    if (!empty($data['event_id'])) {
+        $eventId = (int)$data['event_id'];
+        if (eventExists($conn, $eventId)) {
+            return $eventId;
+        }
+        respond(404, ['error' => 'Event not found by ID']);
+    }
+
+    $title = trim($data['title'] ?? $data['titel'] ?? '');
+    $creatorEmail = trim($data['creator_email'] ?? $data['email'] ?? '');
+
+    if ($title === '') {
+        respond(400, ['error' => 'Either event_id or title is required to identify the event.']);
+    }
+
+    if ($creatorEmail !== '') {
+        $event = fetchOne(
+            $conn,
+            'SELECT e.ID FROM calender_event e 
+             JOIN page p ON p.ID = e.ID 
+             JOIN user u ON u.ID = p.FORuser 
+             WHERE p.titel = ? AND u.email = ?',
+            [$title, $creatorEmail]
+        );
+    } else {
+        $event = fetchOne(
+            $conn,
+            'SELECT e.ID FROM calender_event e 
+             JOIN page p ON p.ID = e.ID 
+             WHERE p.titel = ?',
+            [$title]
+        );
+    }
+
+    if (!$event) {
+        respond(404, ['error' => 'Event not found matching the specified title and creator.']);
+    }
+
+    return (int)$event['ID'];
+}
+
+// 2. Cleans, deduplicates, and resolves an array of emails to user IDs.
+//    Stops with 400 if any emails are missing from the database.
+function resolveUserIdsFromEmails(mysqli $conn, array $rawEmails): array {
+    $emails = array_values(array_unique(array_filter(array_map('trim', $rawEmails))));
+    if (empty($emails)) return [];
+
+    $in = implode(',', array_fill(0, count($emails), '?'));
+    $rows = fetchAll($conn, "SELECT ID, email FROM user WHERE email IN ($in)", $emails);
+
+    $foundMap = [];
+    foreach ($rows as $row) {
+        $foundMap[$row['email']] = (int)$row['ID'];
+    }
+
+    $missing = [];
+    $userIds = [];
+    foreach ($emails as $email) {
+        if (isset($foundMap[$email])) {
+            $userIds[] = $foundMap[$email];
+        } else {
+            $missing[] = $email;
+        }
+    }
+
+    if ($missing) {
+        respond(400, ['error' => 'unknown user emails', 'unknown_emails' => $missing]);
+    }
+
+    return $userIds;
+}
+
+// 3. Handles mixed inputs containing both numeric IDs and email strings (e.g. [2, "bob@test.com"])
+function resolveParticipants(mysqli $conn, array $raw): array {
+    $ids = [];
+    $emails = [];
+    foreach ($raw as $item) {
+        if (is_numeric($item)) {
+            $ids[] = (int)$item;
+        } elseif (is_string($item) && str_contains($item, '@')) {
+            $emails[] = trim($item);
+        }
+    }
+    
+    $resolvedIds = $ids;
+    if (!empty($emails)) {
+        $resolvedIds = array_merge($resolvedIds, resolveUserIdsFromEmails($conn, $emails));
+    }
+    
+    return array_values(array_unique(array_filter($resolvedIds, fn($i) => $i > 0)));
+}
+
+// 4. Resolves a single user ID from an identifier (supports numeric ID or email string)
+function resolveUserId($conn, $identifier): int {
+    if (is_numeric($identifier)) {
+        return (int)$identifier;
+    }
+    if (is_string($identifier) && str_contains($identifier, '@')) {
+        $row = fetchOne($conn, 'SELECT ID FROM user WHERE email = ?', [trim($identifier)]);
+        return $row ? (int)$row['ID'] : 0;
+    }
+    return 0;
 }

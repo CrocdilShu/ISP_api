@@ -84,11 +84,8 @@ function cleanText255($raw, string $field): ?string {
 
 // ---------------------------------------------------------------
 // GET getUser
-// optional: ?user_id=x      (get one specific user)
-// optional: ?page_type=     blog | wiki | calendar  (the pages/events the users own)
-// Works with only the company key, but then you only see public data. Log in
-// (X-User-Token) to also see your own private pages and your own email.
-// Admins see everything. Emails are only shown to admins and to the user themselves.
+// optional: ?user_id=x  (or ?email=user@test.com) (get one specific user)
+// optional: ?page_type=   blog | wiki | calendar  (the pages/events the users own)
 // ---------------------------------------------------------------
 function getUser(mysqli $conn): void {
     requireMethod('GET');
@@ -99,7 +96,19 @@ function getUser(mysqli $conn): void {
     $isAdmin = $acting !== null && roleLevel($acting['role_name']) >= 2;
 
     $pageType = strtolower(trim((string)($_GET['page_type'] ?? '')));
+    
+    // Resolve user_id: accept explicit user_id or look up via email parameter
     $userId = (int)($_GET['user_id'] ?? 0);
+    if ($userId <= 0 && !empty($_GET['email'])) {
+        $lookupEmail = trim($_GET['email']);
+        $userRow = fetchOne($conn, 'SELECT ID FROM user WHERE email = ?', [$lookupEmail]);
+        if ($userRow) {
+            $userId = (int)$userRow['ID'];
+        } else {
+            respond(404, ['error' => 'User not found by email.']);
+        }
+    }
+
     $params = [];
 
     // Only getUser and nothing more: the users with ID and username (and email when allowed)
@@ -165,7 +174,7 @@ function getUser(mysqli $conn): void {
         $params[] = $actingId;
     }
 
-    // Filter by user_id if supplied
+    // Filter by resolved user_id if supplied
     if ($userId > 0) {
         $sql .= ' AND u.ID = ?';
         $params[] = $userId;

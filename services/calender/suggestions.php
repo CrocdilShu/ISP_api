@@ -15,32 +15,22 @@ if (!defined('CALENDER_API')) {
 
 // stops unless the acting employee is a participant of the event (the owner
 // is always one); returns their id
-function requireParticipant(mysqli $conn, int $eventId): int {
+function requireParticipant(mysqli $conn, int$eventId): int {
     $actingId = requireActingUser($conn);
-    if (!eventExists($conn, $eventId)) respond(404, ['error' => 'event not found']);
-    if (!isParticipant($conn, $eventId, $actingId)) {
+    if (!eventExists($conn,$eventId)) respond(404, ['error' => 'event not found']);
+    if (!isParticipant($conn, $eventId,$actingId)) {
         respond(403, ['error' => 'only participants of the event can do this']);
     }
     return $actingId;
 }
 
-function cleanSuggestionText($raw): string {
-    if (!is_string($raw)) respond(400, ['error' => 'text is required']);
-    $text = trim($raw);
-    if ($text === '' || mb_strlen($text) > 5000) {
-        respond(400, ['error' => 'text is required (max 5000 characters)']);
-    }
-    return $text;
-}
-
 // loads a suggestion that belongs to an event, or stops with 400/404
-function loadSuggestion(mysqli $conn, int $suggestionId): array {
+function loadSuggestion(mysqli $conn, int$suggestionId): array {
     if ($suggestionId <= 0) respond(400, ['error' => 'suggestion_id is required']);
-    $row = fetchOne(
-        $conn,
+    $row = fetchOne($conn,
         'SELECT c.ID, c.FORuser, c.FORpage
-         FROM comment c JOIN calender_event e ON e.ID = c.FORpage
-         WHERE c.ID = ?',
+            FROM comment c JOIN calender_event e ON e.ID = c.FORpage
+            WHERE c.ID = ?',
         [$suggestionId]
     );
     if (!$row) respond(404, ['error' => 'suggestion not found']);
@@ -48,29 +38,26 @@ function loadSuggestion(mysqli $conn, int $suggestionId): array {
 }
 
 // ---------------------------------------------------------------
-// GET getSuggestions  ?event_id=1
+// GET getSuggestions  ?event_id=1  (or ?title=...&creator_email=...)
 // oldest first
 // ---------------------------------------------------------------
 function getSuggestions(mysqli $conn): void {
     requireMethod('GET');
 
-    $eventId = (int)($_GET['event_id'] ?? 0);
-    if ($eventId <= 0) respond(400, ['error' => 'event_id is required']);
-    if (!eventExists($conn, $eventId)) respond(404, ['error' => 'event not found']);
+    // Automatically resolves event ID from query parameters (supports title & email lookup)
+    $eventId = resolveEventId($conn,$_GET);
 
-    $rows = fetchAll(
-        $conn,
+    $rows = fetchAll($conn,
         'SELECT c.ID AS suggestion_id, c.content, c.created_at, c.last_update,
                 c.FORuser AS user_id, u.username, u.pfp_file
-         FROM comment c
-         LEFT JOIN user u ON u.ID = c.FORuser
-         WHERE c.FORpage = ?
-         ORDER BY c.created_at ASC, c.ID ASC',
+            FROM comment c
+            LEFT JOIN user u ON u.ID = c.FORuser
+            WHERE c.FORpage = ?
+            ORDER BY c.created_at ASC, c.ID ASC',
         [$eventId]
     );
 
-    foreach ($rows as &$row) {
-        $content = $row['content'] !== null ? json_decode($row['content'], true) : null;
+    foreach ($rows as &$row) {$content = $row['content'] !== null ? json_decode($row['content'], true) : null;
         $row['text'] = is_array($content) ? ($content['text'] ?? null) : null;
         unset($row['content']);
     }
@@ -81,67 +68,107 @@ function getSuggestions(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // POST createSuggestion (the old name addSuggestion also works)   (participants only)
-// body: {"event_id":1, "text":"Can we move it to 11:00?"}
+// body: {"title": "Morning Sync", "creator_email": "alice@test.com", "text": "Can we move it to 11:00?"}
 // ---------------------------------------------------------------
 function addSuggestion(mysqli $conn): void {
     requireMethod('POST');
     $body = getBody();
 
-    $eventId = (int)($body['event_id'] ?? 0);
-    if ($eventId <= 0) respond(400, ['error' => 'event_id is required']);
-    $actingId = requireParticipant($conn, $eventId);
+    $eventId = resolveEventId($conn, $body);$actingId = requireParticipant($conn,$eventId);
     $text = cleanSuggestionText($body['text'] ?? null);
 
     run(
         $conn,
         'INSERT INTO comment (content, FORuser, FORpage) VALUES (?, ?, ?)',
-        [json_encode(['text' => $text], JSON_UNESCAPED_UNICODE), $actingId, $eventId]
+        [jsonContent($text), $actingId,$eventId]
     );
     respond(201, ['message' => 'suggestion added', 'suggestion_id' => $conn->insert_id]);
 }
 
 // ---------------------------------------------------------------
-// PUT editSuggestion (POST also accepted)   (the author only, and they must still be a participant)
-// body: {"suggestion_id":9, "text":"New text"}
+// POST editSuggestion
+// Updates a suggestion for a specific calendar event.
+// Body: { "suggestion_id": 1, "title": "Morning Sync", "creator_email": "alice@test.com", "content": "..." }
 // ---------------------------------------------------------------
 function editSuggestion(mysqli $conn): void {
-    requireMethod('PUT', 'POST');
-    $body = getBody();
+    requireMethod('POST', 'PUT');
 
-    $suggestion = loadSuggestion($conn, (int)($body['suggestion_id'] ?? 0));
-    $actingId = requireParticipant($conn, (int)$suggestion['FORpage']);
-    if ((int)$suggestion['FORuser'] !== $actingId) {
-        respond(403, ['error' => 'you can only edit your own suggestions']);
+    // 1. Ensure the user is authenticated
+    requireActingUser($conn);
+
+    // 2. Parse request body
+    $body = getBody();
+    $suggestionId = (int)($body['suggestion_id'] ?? 0);
+    if ($suggestionId <= 0) {
+        respond(400, ['error' => 'suggestion_id is required.']);
     }
-    $text = cleanSuggestionText($body['text'] ?? null);
+
+    $eventId = resolveEventId($conn, $body);$newContent = cleanSuggestionText($body['content'] ?? $body['text'] ?? null);
+
+    // 3. Load suggestion and check event match
+    $suggestion = loadSuggestion($conn,$suggestionId);
+    if ((int)$suggestion['FORpage'] !==$eventId) {
+        respond(404, ['error' => 'Suggestion not found for the specified event.']);
+    }
 
     run(
         $conn,
-        'UPDATE comment SET content = ? WHERE ID = ?',
-        [json_encode(['text' => $text], JSON_UNESCAPED_UNICODE), (int)$suggestion['ID']]
+        'UPDATE comment SET content = ?, last_update = NOW() WHERE ID = ? AND FORpage = ?',
+        [jsonContent($newContent), $suggestionId,$eventId]
     );
-    respond(200, ['message' => 'suggestion updated']);
+
+    // 4. Return success response
+    respond(200, [
+        'status' => 'success',
+        'message' => "Successfully updated suggestion ID {$suggestionId} for event ID {$eventId}.",
+        'suggestion_id' => $suggestionId,
+        'event_id' => $eventId,
+        'updated_at' => date('Y-m-d H:i:s')
+    ]);
 }
 
 // ---------------------------------------------------------------
 // DELETE deleteSuggestion (POST also accepted)
-// suggestion_id can be sent in the URL or in the body   (the author, or the owner of the event)
-// body: {"suggestion_id":9}
+// suggestion_id and event identifier can be sent in the body or URL parameters
+// body: {"suggestion_id": 9, "title": "Morning Sync", "creator_email": "alice@test.com"}
 // ---------------------------------------------------------------
 function deleteSuggestion(mysqli $conn): void {
     requireMethod('DELETE', 'POST');
     $body = getBody();
+    $params = !empty($body) ? $body :$_GET;
 
-    $suggestion = loadSuggestion($conn, (int)($body['suggestion_id'] ?? $_GET['suggestion_id'] ?? 0));
-    $actingId = requireActingUser($conn);
-
-    $page = fetchOne($conn, 'SELECT FORuser FROM page WHERE ID = ?', [(int)$suggestion['FORpage']]);
-    $isOwner = $page && (int)$page['FORuser'] === $actingId;
-    $isAuthor = (int)$suggestion['FORuser'] === $actingId;
-    if (!$isOwner && !$isAuthor) {
-        respond(403, ['error' => 'only the author or the owner of the event can delete a suggestion']);
+    $suggestionId = (int)($params['suggestion_id'] ?? 0);
+    if ($suggestionId <= 0) {
+        respond(400, ['error' => 'suggestion_id is required.']);
     }
 
-    run($conn, 'DELETE FROM comment WHERE ID = ?', [(int)$suggestion['ID']]);
-    respond(200, ['message' => 'suggestion deleted']);
+    $eventId = resolveEventId($conn,$params);
+
+    // Load the suggestion and ensure it actually belongs to this event (FORpage)
+    $suggestion = loadSuggestion($conn,$suggestionId);
+    if (!$suggestion || (int)$suggestion['FORpage'] !==$eventId) {
+        respond(404, ['error' => 'Suggestion not found for the specified event.']);
+    }
+
+    // Authenticate the acting user
+    $actingId = requireActingUser($conn);
+
+    // Check permissions (Owner of the event or Author of the suggestion)
+    $page = fetchOne($conn, 'SELECT FORuser FROM page WHERE ID = ?', [$eventId]);
+    $isOwner =$page && (int)$page['FORuser'] ===$actingId;
+    $isAuthor = (int)$suggestion['FORuser'] ===$actingId;
+    
+    if (!$isOwner && !$isAuthor) {
+        respond(403, ['error' => 'Only the author or the owner of the event can delete a suggestion.']);
+    }
+
+    // Delete the comment/suggestion securely matching both ID and event (FORpage)
+    run($conn, 'DELETE FROM comment WHERE ID = ? AND FORpage = ?', [$suggestionId,$eventId]);
+    
+    respond(200, [
+        'status' => 'success',
+        'message' => 'Suggestion deleted successfully.',
+        'suggestion_id' => $suggestionId,
+        'event_id' => $eventId
+    ]);
 }

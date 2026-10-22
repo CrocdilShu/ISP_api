@@ -1,14 +1,14 @@
 info:
-  name: loginUser
+  name: answerInvite
   type: http
-  seq: 6
+  seq: 14
 
 http:
   method: POST
-  url: https://gosapi.ddev.site:8443/services/user/user.php?action=loginUser
+  url: "{{baseUrl}}calender/calender.php?action=respondToInvite"
   params:
     - name: action
-      value: loginUser
+      value: respondToInvite
       type: query
   auth: inherit
 

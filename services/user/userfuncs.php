@@ -88,6 +88,9 @@ function cleanText255($raw, string $field): ?string {
 // optional: ?page_type=   blog | wiki | calendar  (the pages/events the users own)
 // optional: ?title=M     (filters pages/events starting with M)
 // optional: ?username=M  (filters users starting with M)
+// optional: ?start_id=40 (minimum user ID to start from)
+// optional: ?limit=100   (maximum number of users to return)
+// optional: ?step=3      (stride/step pattern: take 1, skip 2 = 3)
 // ---------------------------------------------------------------
 function getUser(mysqli $conn): void {
     requireMethod('GET');
@@ -111,25 +114,39 @@ function getUser(mysqli $conn): void {
         }
     }
 
-    $params = [];
-
-    // Only getUser and nothing more: the users with ID and username (and email when allowed)
+    // Only getUser and nothing more: users with ID, username, and email (with pagination & step support)
     if ($pageType === '') {
-        $sql = 'SELECT u.ID, u.username, u.email FROM user u WHERE 1 = 1';
-        
+        $startId = (int)($_GET['start_id'] ?? 0);
+        $limit = (int)($_GET['limit'] ?? 100);
+        $step = (int)($_GET['step'] ?? 1);
+
+        if ($limit <= 0) $limit = 100;
+        if ($step < 1) $step = 1;
+
+        // Build base inner query
+        $innerSql = 'SELECT u.ID, u.username, u.email FROM user u WHERE u.ID >= ?';
+        $innerParams = [$startId];
+
         if ($userId > 0) {
-            $sql .= ' AND u.ID = ?';
-            $params[] = $userId;
+            $innerSql .= ' AND u.ID = ?';
+            $innerParams[] = $userId;
         }
 
-        // Optional username prefix filter (e.g. ?username=M or ?name=M -> matches usernames starting with M)
         $usernamePrefix = trim((string)($_GET['username'] ?? $_GET['name'] ?? ''));
         if ($usernamePrefix !== '') {
-            $sql .= ' AND u.username LIKE ?';
-            $params[] = $usernamePrefix . '%';
+            $innerSql .= ' AND u.username LIKE ?';
+            $innerParams[] = $usernamePrefix . '%';
         }
 
-        $sql .= ' ORDER BY u.ID ASC';
+        // Wrap with window function for step/stride filtering and limit caps
+        $sql = 'SELECT ID, username, email FROM (
+                    SELECT ID, username, email, ROW_NUMBER() OVER (ORDER BY ID ASC) AS row_num
+                    FROM (' . $innerSql . ') base
+                ) t
+                WHERE (row_num - 1) % ? = 0
+                LIMIT ?';
+
+        $params = array_merge($innerParams, [$step, $limit]);
 
         $users = fetchAll($conn, $sql, $params);
         foreach ($users as &$user) {
@@ -139,8 +156,16 @@ function getUser(mysqli $conn): void {
         }
         unset($user);
 
-        respond(200, ['users' => $users]);
+        respond(200, [
+            'start_id' => $startId,
+            'limit' => $limit,
+            'step' => $step,
+            'count' => count($users),
+            'users' => $users
+        ]);
     }
+
+    $params = [];
 
     // Depending on what page_type was asked for
     switch ($pageType) {
@@ -213,6 +238,20 @@ function getUser(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // POST createNewUser
+// body: {
+//      "email": "user@example.com",       (required, max 255 chars)
+//      "username": "username",            (required, max 255 chars)
+//      "password": "plain_password",      (required, 8-72 chars)
+//      "description": "...",              (optional, max 255 chars or null)
+//      "pfp_file": "...",                 (optional, max 255 chars, defaults to DEFAULT_PFP)
+//      "FORrole": x                       (optional, role ID, defaults to 1 = user)
+// }
+//
+// Behavior & Rules:
+// - The very first user created in an empty database requires no login and automatically becomes a 'root_admin'.
+// - Subsequent users require an authenticated admin (role level >= 2) to make the request.
+// - Admins can only assign roles up to their own power level.
+// - Email addresses must be unique across the system.
 // ---------------------------------------------------------------
 function createNewUser(mysqli $conn): void {
     requireMethod('POST');
@@ -282,14 +321,36 @@ function createNewUser(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT editUser (POST also accepted)
+// body: {
+//      "user_id": 5,                      (optional if target_email is provided)
+//      "target_email": "old@example.com", (optional: used to look up user if user_id is omitted)
+//      "email": "new@example.com",        (optional: the new email to update to)
+//      "username": "new_username",        (optional)
+//      "password": "new_plain_password",  (optional, 8-72 chars)
+//      "description": "",              (optional)
+//      "pfp_file": "",                 (optional)
+//      "FORrole": 2                       (optional)
+// }
 // ---------------------------------------------------------------
 function editUser(mysqli $conn): void {
     requireMethod('PUT', 'POST');
     $body = getBody();
 
     $userId = (int)($body['user_id'] ?? 0);
+    $targetEmail = trim((string)($body['target_email'] ?? ''));
+
+    // Allow identifying the target user via target_email if user_id is not provided
+    if ($userId <= 0 && $targetEmail !== '') {
+        $targetUserRow = fetchOne($conn, 'SELECT ID FROM user WHERE email = ?', [$targetEmail]);
+        if ($targetUserRow) {
+            $userId = (int)$targetUserRow['ID'];
+        } else {
+            respond(404, ['error' => 'User not found by target email']);
+        }
+    }
+
     if ($userId <= 0) {
-        respond(400, ['error' => 'user_id is required']);
+        respond(400, ['error' => 'user_id or target_email is required']);
     }
 
     $acting = actingUserRow($conn, true);
@@ -387,6 +448,16 @@ function editUser(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // DELETE deleteUser (POST also accepted)
+// body: {
+//      "email": "user@example.com",      (required, can also be passed in URL as ?email=...)
+//      "remove": ["calendar", "wiki"]    (optional: array of specific data types to remove)
+// }
+// 
+// Behavior:
+// - If "remove" is omitted, deletes the entire user account and all associated data.
+// - Supported removal types: "calendar" (or "calendar_event"), "wiki", "blog", "account" (or "user").
+// - Permissions: You can delete yourself, or users with a lower role than yours (root_admin can delete anyone).
+// - Constraint: The last remaining root_admin user can never be deleted.
 // ---------------------------------------------------------------
 function deleteUser(mysqli $conn): void {
     requireMethod('DELETE', 'POST');

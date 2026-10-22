@@ -327,37 +327,6 @@ function resolveEventId(mysqli $conn, array $data): int {
     return (int)$event['ID'];
 }
 
-// 2. Cleans, deduplicates, and resolves an array of emails to user IDs.
-//    Stops with 400 if any emails are missing from the database.
-function resolveUserIdsFromEmails(mysqli $conn, array $rawEmails): array {
-    $emails = array_values(array_unique(array_filter(array_map('trim', $rawEmails))));
-    if (empty($emails)) return [];
-
-    $in = implode(',', array_fill(0, count($emails), '?'));
-    $rows = fetchAll($conn, "SELECT ID, email FROM user WHERE email IN ($in)", $emails);
-
-    $foundMap = [];
-    foreach ($rows as $row) {
-        $foundMap[$row['email']] = (int)$row['ID'];
-    }
-
-    $missing = [];
-    $userIds = [];
-    foreach ($emails as $email) {
-        if (isset($foundMap[$email])) {
-            $userIds[] = $foundMap[$email];
-        } else {
-            $missing[] = $email;
-        }
-    }
-
-    if ($missing) {
-        respond(400, ['error' => 'unknown user emails', 'unknown_emails' => $missing]);
-    }
-
-    return $userIds;
-}
-
 // 3. Handles mixed inputs containing both numeric IDs and email strings (e.g. [2, "bob@test.com"])
 function resolveParticipants(mysqli $conn, array $raw): array {
     $ids = [];

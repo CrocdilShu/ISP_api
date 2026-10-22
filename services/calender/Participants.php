@@ -67,11 +67,11 @@ function addParticipants(mysqli $conn): void {
         $conn->commit();
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
-        respond(500, ['error' => 'could not add participants']);
+        respond(500, ['error' => 'Could not add participants']);
     }
 
     respond(200, [
-        'message' => 'participants added successfully',
+        'message' => 'Participants added successfully',
         'added_user_ids' => $added
     ]);
 }
@@ -127,9 +127,9 @@ function editParticipants(mysqli $conn): void {
         }
 
         $conn->commit();
-        respond(200, ['message' => 'participants updated successfully']);
+        respond(200, ['message' => 'Participants updated successfully']);
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
-        respond(500, ['error' => 'could not update participants']);
+        respond(500, ['error' => 'Could not update participants']);
     }
 }

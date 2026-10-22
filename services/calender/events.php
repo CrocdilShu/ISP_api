@@ -82,7 +82,7 @@ function createNewEvent(mysqli $conn): void {
 
     $title = trim((string)($body['title'] ?? ''));
     if ($title === '' || mb_strlen($title) > 255) {
-        respond(400, ['error' => 'title is required (max 255 characters)']);
+        respond(400, ['error' => 'Title is required (max 255 characters)']);
     }
     $content = (array_key_exists('content', $body) && $body['content'] !== null)
         ? json_encode($body['content'])
@@ -91,9 +91,11 @@ function createNewEvent(mysqli $conn): void {
     $start = $body['start_time'] ?? null;
     $end   = $body['end_time'] ?? null;
     if (!validDate($start) || !validDate($end)) {
-        respond(400, ['error' => 'start_time and end_time must be "Y-m-d H:i:s"']);
+        respond(400, ['error' => 'start_time and end_time must be in "Y-m-d H:i:s" format']);
     }
-    if ($end <= $start) respond(400, ['error' => 'end_time must be after start_time']);
+    if ($end <= $start) {
+        respond(400, ['error' => 'end_time must be after start_time']);
+    }
 
     $recurrence = null;
     if (!empty($body['recurrence']) && is_array($body['recurrence'])) {
@@ -125,10 +127,10 @@ function createNewEvent(mysqli $conn): void {
         }
 
         $conn->commit();
-        respond(201, ['message' => 'event created', 'event_id' => $eventId]);
+        respond(201, ['message' => 'Event created successfully', 'event_id' => $eventId]);
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
-        respond(500, ['error' => 'could not create event']);
+        respond(500, ['error' => 'Could not create event']);
     }
 }
 
@@ -149,18 +151,24 @@ function editEvent(mysqli $conn): void {
         'SELECT start_time, end_time, FORrecurrence FROM calender_event WHERE ID = ?',
         [$eventId]
     );
-    if (!$current) respond(404, ['error' => 'event not found']);
+    if (!$current) {
+        respond(404, ['error' => 'Event not found']);
+    }
 
     // fields on calender_event
     $fields = [];
     $params = [];
     if (array_key_exists('start_time', $body)) {
-        if (!validDate($body['start_time'])) respond(400, ['error' => 'bad start_time']);
+        if (!validDate($body['start_time'])) {
+            respond(400, ['error' => 'Invalid start_time format']);
+        }
         $fields[] = 'start_time = ?';
         $params[] = $body['start_time'];
     }
     if (array_key_exists('end_time', $body)) {
-        if (!validDate($body['end_time'])) respond(400, ['error' => 'bad end_time']);
+        if (!validDate($body['end_time'])) {
+            respond(400, ['error' => 'Invalid end_time format']);
+        }
         $fields[] = 'end_time = ?';
         $params[] = $body['end_time'];
     }
@@ -171,7 +179,7 @@ function editEvent(mysqli $conn): void {
     if (array_key_exists('title', $body)) {
         $title = trim((string)$body['title']);
         if ($title === '' || mb_strlen($title) > 255) {
-            respond(400, ['error' => 'title must be 1-255 characters']);
+            respond(400, ['error' => 'Title must be between 1 and 255 characters']);
         }
         $pageFields[] = 'titel = ?';
         $pageParams[] = $title;
@@ -186,17 +194,21 @@ function editEvent(mysqli $conn): void {
     $newRecurrence = null;
     if ($changeRecurrence && $body['recurrence'] !== null) {
         if (!is_array($body['recurrence'])) {
-            respond(400, ['error' => 'recurrence must be an object or null']);
+            respond(400, ['error' => 'Recurrence must be an object or null']);
         }
         $newRecurrence = validateRecurrence($body['recurrence']);
     }
 
-    if (!$fields && !$pageFields && !$changeRecurrence) respond(400, ['error' => 'nothing to update']);
+    if (!$fields && !$pageFields && !$changeRecurrence) {
+        respond(400, ['error' => 'No fields provided to update']);
+    }
 
     // check the final times
     $newStart = $body['start_time'] ?? $current['start_time'];
     $newEnd   = $body['end_time'] ?? $current['end_time'];
-    if ($newEnd <= $newStart) respond(400, ['error' => 'end_time must be after start_time']);
+    if ($newEnd <= $newStart) {
+        respond(400, ['error' => 'end_time must be after start_time']);
+    }
 
     $oldRecurrence = $current['FORrecurrence'] !== null ? (int)$current['FORrecurrence'] : null;
 
@@ -219,13 +231,15 @@ function editEvent(mysqli $conn): void {
             run($conn, 'UPDATE page SET ' . implode(', ', $pageFields) . ' WHERE ID = ?', $pageParams);
         }
 
-        if ($changeRecurrence) cleanupRecurrence($conn, $oldRecurrence);
+        if ($changeRecurrence) {
+            cleanupRecurrence($conn, $oldRecurrence);
+        }
 
         $conn->commit();
-        respond(200, ['message' => 'event updated']);
+        respond(200, ['message' => 'Event updated successfully']);
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
-        respond(500, ['error' => 'could not update event']);
+        respond(500, ['error' => 'Could not update event']);
     }
 }
 
@@ -240,7 +254,7 @@ function deleteEvent(mysqli $conn): void {
     // Authenticate user via session token
     $userId = actingUserId($conn);
     if ($userId === 0) {
-        respond(401, ['error' => 'unauthorized or invalid user token']);
+        respond(401, ['error' => 'Unauthorized or invalid user token']);
     }
 
     $body = getBody();
@@ -250,7 +264,7 @@ function deleteEvent(mysqli $conn): void {
     // Check if the calendar event exists
     $event = fetchOne($conn, 'SELECT ID FROM calender_event WHERE ID = ?', [$eventId]);
     if (!$event) {
-        respond(404, ['error' => 'event not found']);
+        respond(404, ['error' => 'Event not found']);
     }
 
     // Check ownership (from the page table) or user role (admin/root_admin)
@@ -261,14 +275,14 @@ function deleteEvent(mysqli $conn): void {
     $isOwner = ((int)($page['FORuser'] ?? 0) === $userId);
 
     if (!$isOwner && !$isAdmin) {
-        respond(403, ['error' => 'you do not have permission to delete this event']);
+        respond(403, ['error' => 'You do not have permission to delete this event']);
     }
 
     try {
         // Deleting the page row automatically deletes the calender_event due to ON DELETE CASCADE
         run($conn, 'DELETE FROM page WHERE ID = ?', [$eventId]);
-        respond(200, ['message' => 'event deleted successfully']);
+        respond(200, ['message' => 'Event deleted successfully']);
     } catch (mysqli_sql_exception $e) {
-        respond(500, ['error' => 'could not delete the event']);
+        respond(500, ['error' => 'Could not delete event']);
     }
 }

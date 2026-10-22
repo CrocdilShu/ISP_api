@@ -5,14 +5,24 @@ info:
 
 http:
   method: PUT
-  url: http://localhost/api/wiki/pages.php?id=1&session_key=DIN_NYCKEL
+  url: https://gosapi.ddev.site:8443/services/wiki/pages.php?id=13&session_key=ddbd60cafe3e2e42727fd8b60b00e2bf657bab1b9099c2f2c61d81772c207a90
   params:
     - name: id
-      value: "1"
+      value: "13"
       type: query
     - name: session_key
-      value: DIN_NYCKEL
+      value: ddbd60cafe3e2e42727fd8b60b00e2bf657bab1b9099c2f2c61d81772c207a90
       type: query
+  body:
+    type: json
+    data: |-
+      {
+        "titel": "Uppdaterad Wiki Titel",
+        "content": {
+          "text": "Ny uppdaterad text här!"
+        },
+        "removed_pic": null
+      }
   auth: inherit
 
 settings:

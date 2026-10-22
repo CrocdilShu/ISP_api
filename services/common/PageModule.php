@@ -33,7 +33,7 @@ class PageModule {
             }
         }
 
-        if ($token === null \vert{}\vert{}$token === '') {
+        if ($token === null || $token === '') {
             return null;
         }
 
@@ -54,7 +54,7 @@ class PageModule {
         }
 
         // Banned eller deleted_user får inte agera
-        if ($row['username'] === 'deleted_user' \vert{}\vert{}$row['role_name'] === 'banned') {
+        if ($row['username'] === 'deleted_user' || $row['role_name'] === 'banned') {
             return null;
         }
 
@@ -102,7 +102,7 @@ class PageModule {
     }
 
     public function isAdmin(int $userId): bool {$role = $this->getUserRole($userId);
-        return $role === 'admin' \vert{}\vert{}$role === 'root_admin';
+        return $role === 'admin' || $role === 'root_admin';
     }
 
     public function normalizeVisibility(mixed $visibility): ?string {
@@ -395,7 +395,7 @@ class PageModule {
             return;
         }
 
-        if ($row['role_name'] === 'banned' \vert{}\vert{}$row['username'] === 'deleted_user') {
+        if ($row['role_name'] === 'banned' || $row['username'] === 'deleted_user') {
             $this->removePageOwnership($pageId);
         }
     }
@@ -466,7 +466,7 @@ class PageModule {
         if ($page['visibility'] !== 'private') {
             return true;
         }
-        if ($viewerId === null \vert{}\vert{}$viewerId <= 0) {
+        if ($viewerId === null || $viewerId <= 0) {
             return false;
         }
         if ((int)$page['owner_id'] ===$viewerId || $this->isAdmin($viewerId)) {

@@ -5,13 +5,13 @@ info:
 
 http:
   method: DELETE
-  url: http://localhost/api/wiki/pages.php?id=1&session_key=DIN_NYCKEL
+  url: http://localhost/api/wiki/pages.php?id=1&session_key=add4bbc117e3a7e8a2f99aa49c26262e903e6a4e0a8476c7655117e080452dec
   params:
     - name: id
       value: "1"
       type: query
     - name: session_key
-      value: DIN_NYCKEL
+      value: add4bbc117e3a7e8a2f99aa49c26262e903e6a4e0a8476c7655117e080452dec
       type: query
   auth: inherit
 

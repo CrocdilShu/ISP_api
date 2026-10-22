@@ -1,3 +1,5 @@
 name: data
 variables:
   - name: X-User-Token
+    value: ""
+    description: ""

@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: https://gosapi.ddev.site:8443/services/wiki/admins.php?session_key=DIN_SESSION_KEY
+  url: https://gosapi.ddev.site:8443/services/wiki/admins.php?session_key=040a7983af128115665d46842e05de5cf62941a3dc73150dae38a4e12fd1fbeb
   params:
     - name: session_key
-      value: DIN_SESSION_KEY
+      value: 040a7983af128115665d46842e05de5cf62941a3dc73150dae38a4e12fd1fbeb
       type: query
   auth: inherit
 

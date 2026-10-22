@@ -5,11 +5,22 @@ info:
 
 http:
   method: POST
-  url: http://localhost/api/wiki/pages.php?session_key=DIN_NYCKEL
+  url: https://gosapi.ddev.site:8443/services/wiki/pages.php?session_key=add4bbc117e3a7e8a2f99aa49c26262e903e6a4e0a8476c7655117e080452dec
   params:
     - name: session_key
-      value: DIN_NYCKEL
+      value: add4bbc117e3a7e8a2f99aa49c26262e903e6a4e0a8476c7655117e080452dec
       type: query
+  body:
+    type: json
+    data: |-
+      {
+        "titel": "Min Wiki Sida",
+        "content": {
+          "text": "Innehåll här"
+        },
+        "visibility": "public"
+        // "visibility": "private"
+      }
   auth: inherit
 
 settings:

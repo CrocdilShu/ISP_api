@@ -5,10 +5,10 @@ info:
 
 http:
   method: GET
-  url: " https://gosapi.ddev.site:8443/services/wiki/history.php?session_key=YOUR_SESSION_KEY"
+  url: https://gosapi.ddev.site:8443/services/wiki/history.php??page_id=13session_key=ddbd60cafe3e2e42727fd8b60b00e2bf657bab1b9099c2f2c61d81772c207a90
   params:
-    - name: session_key
-      value: YOUR_SESSION_KEY
+    - name: ?page_id
+      value: 13session_key=ddbd60cafe3e2e42727fd8b60b00e2bf657bab1b9099c2f2c61d81772c207a90
       type: query
   auth: inherit
 

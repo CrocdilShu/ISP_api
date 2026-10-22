@@ -7,7 +7,7 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getRequestSessionKey();
+$sessionKey = getCompanySessionKey($conn);
 $providerAccountId = null;
 
 $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);

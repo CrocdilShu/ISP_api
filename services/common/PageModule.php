@@ -43,7 +43,7 @@ class PageModule {
             FROM user_session s
             JOIN `user` u ON u.ID = s.FORuser
             JOIN role r ON r.ID = u.FORrole
-            WHERE s.token_hash = ? AND (s.expires_at IS NULL OR s.expires_at > NOW())
+WHERE s.token_hash = ? AND s.expire_date > NOW()
             LIMIT 1
         ");
         if (!$stmt) { return null; }$stmt->bind_param("s", $tokenHash);$stmt->execute();

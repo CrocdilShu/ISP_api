@@ -4,7 +4,7 @@ require_once __DIR__ . '/../helpers.php';
 
 /**
  * ============================================================================
- * PageModule - Gemensam hanterare för Wiki- och Bloggsidor
+ * PageModule - Gemensam hanterare för Wiki, Undersidor, Bilder & Kommentarer
  * ============================================================================
  */
 class PageModule {
@@ -12,172 +12,99 @@ class PageModule {
     private string $serviceType;
     private string $subTable;
 
-    public function __construct(mysqli $conn, string $serviceType = 'wiki') {
-        $this->conn = $conn;
+    public function __construct(mysqli $conn, string$serviceType = 'wiki') {
+        $this->conn =$conn;
         $this->serviceType = strtolower($serviceType);
         $this->subTable = ($this->serviceType === 'blog') ? 'page_blog' : 'page_wiki';
     }
 
     /**
-     * Identifierar vem som gör anropet:
-     * 1. Om X-User-Token skickas med -> den anställdes user.ID. Är token ogiltig/utgången
-     *    returneras null (INGEN fallback till root/provider, annars kan en trasig token ge högre behörighet).
-     * 2. Om session_key tillhör en inloggad root_user (från rootLogin) -> root_admin (FORrole = 3).
-     * 3. Annars om Provider returnerade ett accountId -> synka i user-tabellen.
-     * Returnerar null om ingen kan identifieras (eller om ID-kollision med en root_user upptäcks).
+     * Identifierar anropande användare ENDAST via X-User-Token (user_session -> user).
+     * Om användaren är 'banned' eller 'deleted_user' returneras null.
      */
-    public function resolveRequestUser(?string $sessionKey, ?int $providerAccountId): ?int {
-        // 1. Anställd via X-User-Token
+    public function resolveRequestUser(): ?int {
         $token = function_exists('getUserToken') ? getUserToken() : null;
-        if ($token !== null && $token !== '') {
-            $id = 0;
-            if (function_exists('actingUserId')) {
-                $id = (int)actingUserId($this->conn);
-            } else {
-                $tokenHash = hash('sha256', $token);
-                $stmt = $this->conn->prepare("
-                    SELECT FORuser FROM user_session
-                    WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > NOW())
-                    LIMIT 1
-                ");
-                if ($stmt) {
-                    $stmt->bind_param("s", $tokenHash);
-                    $stmt->execute();
-                    $row = $stmt->get_result()->fetch_assoc();
-                    if ($row) {
-                        $id = (int)$row['FORuser'];
-                    }
+        if ($token === null || $token === '') {$headers = function_exists('getallheaders') ? getallheaders() : [];
+            foreach ($headers as $k =>$v) {
+                if (strtolower((string)$k) === 'x-user-token') {
+                    $token = trim((string)$v);
+                    break;
                 }
-            }
-            return $id > 0 ? $id : null;
-        }
-
-        // 2. session_key tillhör en lokal root_user (inloggad via rootLogin)
-        if ($sessionKey) {
-            try {
-                $stmtRoot = $this->conn->prepare("
-                    SELECT ID, username FROM root_user
-                    WHERE token = ? AND (expire_date IS NULL OR expire_date > NOW())
-                    LIMIT 1
-                ");
-                if ($stmtRoot) {
-                    $stmtRoot->bind_param("s", $sessionKey);
-                    $stmtRoot->execute();
-                    $rootRow = $stmtRoot->get_result()->fetch_assoc();
-                    if ($rootRow) {
-                        $rootId = (int)$rootRow['ID'];
-                        if (!$this->ensureLocalUser($rootId, true, $rootRow['username'])) {
-                            return null; // ID-kollision med en vanlig användare
-                        }
-                        return $rootId;
-                    }
-                }
-            } catch (mysqli_sql_exception $e) {
-                // root_user-tabellen matchar inte, fortsätt till fallback
             }
         }
 
-        // 3. Fallback: Provider returnerade ett konto-ID
-        if ($providerAccountId) {
-            $isRoot = false;
-            $rootUsername = null;
-            try {
-                $stmtCheckRoot = $this->conn->prepare("SELECT username FROM root_user WHERE ID = ? LIMIT 1");
-                if ($stmtCheckRoot) {
-                    $stmtCheckRoot->bind_param("i", $providerAccountId);
-                    $stmtCheckRoot->execute();
-                    $r = $stmtCheckRoot->get_result()->fetch_assoc();
-                    if ($r) {
-                        $isRoot = true;
-                        $rootUsername = $r['username'];
-                    }
-                }
-            } catch (mysqli_sql_exception $e) {
-            }
-
-            if (!$this->ensureLocalUser((int)$providerAccountId, $isRoot, $rootUsername)) {
-                return null;
-            }
-            return (int)$providerAccountId;
+        if ($token === null \vert{}\vert{}$token === '') {
+            return null;
         }
 
-        return null;
+        $tokenHash = hash('sha256',$token);
+        $stmt =$this->conn->prepare("
+            SELECT u.ID, u.username, r.role_name
+            FROM user_session s
+            JOIN `user` u ON u.ID = s.FORuser
+            JOIN role r ON r.ID = u.FORrole
+            WHERE s.token_hash = ? AND (s.expires_at IS NULL OR s.expires_at > NOW())
+            LIMIT 1
+        ");
+        if (!$stmt) { return null; }$stmt->bind_param("s", $tokenHash);$stmt->execute();
+        $row =$stmt->get_result()->fetch_assoc();
+
+        if (!$row) {
+            return null;
+        }
+
+        // Banned eller deleted_user får inte agera
+        if ($row['username'] === 'deleted_user' \vert{}\vert{}$row['role_name'] === 'banned') {
+            return null;
+        }
+
+        return (int)$row['ID'];
     }
 
-    /**
-     * Säkerställer att användar-ID:t finns i `user` (undviker foreign key-fel).
-     * Om $isRootUser är true får användaren rollen root_admin (3).
-     *
-     * root_user.ID och user.ID delar ID-rymd. Finns redan en användare med samma ID men ett
-     * ANNAT användarnamn än root-användarens uppgraderas den INTE (det vore en privilege escalation);
-     * funktionen returnerar då false.
-     */
-    public function ensureLocalUser(?int $userId, bool $isRootUser = false, ?string $customUsername = null): bool {
-        if (!$userId) {
-            return false;
-        }
-
-        $this->conn->query("INSERT IGNORE INTO role (ID, role_name) VALUES (1, 'user'), (2, 'admin'), (3, 'root_admin')");
-
-        $stmt = $this->conn->prepare("SELECT ID, username, FORrole FROM `user` WHERE ID = ?");
-        $stmt->bind_param("i", $userId);
+    public function getDeletedUserId(): int {
+        $stmt =$this->conn->prepare("SELECT ID FROM `user` WHERE username = 'deleted_user' LIMIT 1");
         $stmt->execute();
-        $existing = $stmt->get_result()->fetch_assoc();
-
-        if (!$existing) {
-            $placeholderEmail = "user{$userId}@placeholder.local";
-            $placeholderUsername = $customUsername ?: "user{$userId}";
-            $unusableHash = password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
-            $defaultRole = $isRootUser ? 3 : 1;
-
-            try {
-                $stmtInsert = $this->conn->prepare(
-                    "INSERT INTO `user` (ID, username, email, password_hash, FORrole) VALUES (?, ?, ?, ?, ?)"
-                );
-                $stmtInsert->bind_param("isssi", $userId, $placeholderUsername, $placeholderEmail, $unusableHash, $defaultRole);
-                $stmtInsert->execute();
-            } catch (mysqli_sql_exception $e) {
-                if ($e->getCode() !== 1062) {
-                    throw $e;
-                }
-            }
-            return true;
+        $row =$stmt->get_result()->fetch_assoc();
+        if ($row) {
+            return (int)$row['ID'];
         }
 
-        if ($isRootUser && (int)$existing['FORrole'] !== 3) {
-            if ($customUsername === null || $existing['username'] !== $customUsername) {
-                return false; // kollision: annan person med samma ID
-            }
-            $stmtUpd = $this->conn->prepare("UPDATE `user` SET FORrole = 3 WHERE ID = ?");
-            $stmtUpd->bind_param("i", $userId);
-            $stmtUpd->execute();
-        }
-        return true;
+        $dummyHash = '$2y$10$ierol0lKnAtitBH2SzVLFO5QImS0FYaQmsPZvoBhqjkkel5cWPHl6';
+        $stmtIns =$this->conn->prepare("
+            INSERT INTO `user` (username, email, password_hash, description, FORrole)
+            VALUES ('deleted_user', 'deleted@system.local', ?, 'Borttagen användare', 1)
+        ");
+        $stmtIns->bind_param("s", $dummyHash);$stmtIns->execute();
+        return (int)$this->conn->insert_id;
     }
 
-    /**
-     * Hämtar användarens rollnamn ('user', 'admin', 'root_admin').
-     */
+    public function userExists(int $userId): bool {
+        $stmt =$this->conn->prepare("
+            SELECT u.ID
+            FROM `user` u
+            JOIN role r ON u.FORrole = r.ID
+            WHERE u.ID = ? AND u.username <> 'deleted_user' AND r.role_name <> 'banned'
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $userId);$stmt->execute();
+        return (bool)$stmt->get_result()->fetch_assoc();
+    }
+
     public function getUserRole(int $userId): string {
-        $stmtRole = $this->conn->prepare("
+        $stmtRole =$this->conn->prepare("
             SELECT r.role_name
             FROM `user` u
             JOIN role r ON u.FORrole = r.ID
             WHERE u.ID = ?
         ");
-        $stmtRole->bind_param("i", $userId);
-        $stmtRole->execute();
+        $stmtRole->bind_param("i", $userId);$stmtRole->execute();
         return $stmtRole->get_result()->fetch_assoc()['role_name'] ?? 'user';
     }
 
-    public function isAdmin(int $userId): bool {
-        $role = $this->getUserRole($userId);
-        return $role === 'admin' || $role === 'root_admin';
+    public function isAdmin(int $userId): bool {$role = $this->getUserRole($userId);
+        return $role === 'admin' \vert{}\vert{}$role === 'root_admin';
     }
 
-    /**
-     * Validerar synlighet. Returnerar 'public' | 'private', eller null om värdet är ogiltigt.
-     */
     public function normalizeVisibility(mixed $visibility): ?string {
         if ($visibility === null) {
             return 'public';
@@ -186,15 +113,120 @@ class PageModule {
             return null;
         }
         $v = strtolower(trim($visibility));
-        return ($v === 'public' || $v === 'private') ? $v : null;
+        return ($v === 'public' || $v === 'private') ?$v : null;
     }
 
     /**
-     * Kontrollerar behörighet för redigering och radering av sida.
-     * - $requireOwnerOrAdmin = true: endast HUVUDÄGARE eller admin/root_admin (t.ex. DELETE sida).
-     * - $requireOwnerOrAdmin = false: även delegerade editors/co_owners får redigera (PUT).
+     * ========================================================================
+     * ÖVERORDNADE WIKIS (Sub-wikis som t.ex. "Wikipedia" eller "Fandom")
+     * ========================================================================
      */
-    public function canModify(int $pageId, int $userId, bool $requireOwnerOrAdmin = false): bool {
+    public function createWikiSpace(string $title, ?string $description, int$userId, string $visibility = 'public'): int {$normalized = $this->normalizeVisibility($visibility);
+        if ($normalized === null) {
+            throw new InvalidArgumentException('Invalid visibility');
+        }
+        $visId = ($normalized === 'private') ? 2 : 1;
+
+        $stmt =$this->conn->prepare("
+            INSERT INTO wiki (titel, description, FORuser, FORvisability)
+            VALUES (?, ?, ?, ?)
+        ");
+        $stmt->bind_param("ssii", $title, $description,$userId, $visId);$stmt->execute();
+        return (int)$this->conn->insert_id;
+    }
+
+    public function listWikiSpaces(?int $viewerId, string $search = '', string$sort = 'DESC'): array {
+        $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
+        $params = [];$types = '';
+
+        $sql = "
+            SELECT w.ID AS wiki_id, w.titel, w.description, w.created_at,
+                   w.FORuser AS owner_id, u.username AS owner_username, v.state AS visibility
+            FROM wiki w
+            JOIN `user` u ON w.FORuser = u.ID
+            JOIN visability v ON w.FORvisability = v.ID
+            WHERE 1 = 1
+        ";
+
+        if (!($viewerId && $this->isAdmin($viewerId))) {
+            if ($viewerId && $viewerId > 0) {$sql .= " AND (v.state = 'public' OR w.FORuser = ?)";
+                $params[] =$viewerId;
+                $types .= 'i';
+            } else {
+                $sql .= " AND v.state = 'public'";
+            }
+        }
+
+        if ($search !== '') {$sql .= " AND (w.titel LIKE ? OR w.description LIKE ? OR u.username LIKE ?)";
+            $like = '\%' .$search . '%';
+            $params[] =$like;
+            $params[] =$like;
+            $params[] =$like;
+            $types .= 'sss';
+        }
+
+        $sql .= " ORDER BY w.titel $order, w.created_at DESC";
+
+        $stmt = $this->conn->prepare($sql);
+        if ($params) {$stmt->bind_param($types, ...$params);
+        }
+        $stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    }
+
+    /**
+     * ========================================================================
+     * BILDHANTERING I DATABASEN (Tabellen `picture`)
+     * ========================================================================
+     */
+    public function savePagePictures(int $pageId, int $userId, array$pictures): void {
+        $stmt =$this->conn->prepare("
+            INSERT INTO picture (filename, mime_type, image_data, FORpage, FORuser)
+            VALUES (?, ?, ?, ?, ?)
+        ");
+        foreach ($pictures as$pic) {
+            if (!is_array($pic) || empty($pic['data'])) { continue; }$filename = trim((string)($pic['filename'] ?? 'image.png'));$mimeType = trim((string)($pic['mime_type'] ?? 'image/png'));$data = (string)$pic['data'];$stmt->bind_param("sssii", $filename,$mimeType, $data,$pageId, $userId);$stmt->execute();
+        }
+    }
+
+    public function getPagePictures(int $pageId): array {
+        $stmt =$this->conn->prepare("
+            SELECT ID AS picture_id, filename, mime_type, image_data, created_at, FORuser AS uploaded_by
+            FROM picture
+            WHERE FORpage = ?
+            ORDER BY ID ASC
+        ");
+        $stmt->bind_param("i", $pageId);$stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    }
+
+    public function deletePictureByIdOrName(int $pageId, string$identifier): ?string {
+        if (ctype_digit($identifier)) {
+            $picId = (int)$identifier;
+            $stmt =$this->conn->prepare("SELECT filename FROM picture WHERE ID = ? AND FORpage = ?");
+            $stmt->bind_param("ii", $picId, $pageId);$stmt->execute();
+            $row =$stmt->get_result()->fetch_assoc();
+            if ($row) {
+                $del =$this->conn->prepare("DELETE FROM picture WHERE ID = ? AND FORpage = ?");
+                $del->bind_param("ii", $picId, $pageId);$del->execute();
+                return $row['filename'];
+            }
+        } else {
+            $del =$this->conn->prepare("DELETE FROM picture WHERE filename = ? AND FORpage = ?");
+            $del->bind_param("si", $identifier, $pageId);$del->execute();
+            if ($del->affected_rows > 0) {
+                return $identifier;
+            }
+        }
+        return $identifier;
+    }
+
+    /**
+     * ========================================================================
+     * SIDBEHÖRIGHETER & ÄGARSKAPSÖVERFÖRING (Owner / Co-Owner / Admin / Banned)
+     * ========================================================================
+     */
+    public function canModify(int $pageId, int $userId, bool$requireOwnerOrAdmin = false): bool {
         if ($this->isAdmin($userId)) {
             return true;
         }
@@ -205,16 +237,14 @@ class PageModule {
             JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
             WHERE p.ID = ?
         ";
-        $stmtPage = $this->conn->prepare($sql);
-        $stmtPage->bind_param("i", $pageId);
-        $stmtPage->execute();
-        $page = $stmtPage->get_result()->fetch_assoc();
+        $stmtPage =$this->conn->prepare($sql);$stmtPage->bind_param("i", $pageId);$stmtPage->execute();
+        $page =$stmtPage->get_result()->fetch_assoc();
 
         if (!$page) {
             return false;
         }
 
-        if ((int)$page['FORuser'] === $userId) {
+        if ((int)$page['FORuser'] ===$userId) {
             return true;
         }
 
@@ -224,195 +254,367 @@ class PageModule {
 
         if ($this->subTable === 'page_wiki') {
             $wikiId = (int)$page['sub_id'];
-            $stmtEditor = $this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-            $stmtEditor->bind_param("ii", $wikiId, $userId);
-            $stmtEditor->execute();
+            $stmtEditor =$this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
+            $stmtEditor->bind_param("ii", $wikiId, $userId);$stmtEditor->execute();
             if ($stmtEditor->get_result()->fetch_assoc()) {
                 return true;
             }
         }
 
-        $stmtPerm = $this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-        $stmtPerm->bind_param("ii", $pageId, $userId);
-        $stmtPerm->execute();
+        $stmtPerm =$this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
+        $stmtPerm->bind_param("ii", $pageId, $userId);$stmtPerm->execute();
         return (bool)$stmtPerm->get_result()->fetch_assoc();
     }
 
-    /**
-     * Vem som får lägga till/ta bort rättigheter: huvudägaren, admin/root_admin eller 'co_owner'.
-     * En delägare kan dock ALDRIG ändra eller ta bort huvudägaren.
-     */
-    public function canManagePermissions(int $pageId, int $userId): bool {
-        if ($this->canModify($pageId, $userId, true)) {
+    public function canManagePermissions(int $pageId, int$userId): bool {
+        if ($this->canModify($pageId,$userId, true)) {
             return true;
         }
 
-        $stmt = $this->conn->prepare("
+        $stmt =$this->conn->prepare("
             SELECT upp.ID
             FROM user_permission_page upp
             JOIN permission perm ON upp.FORpermission = perm.ID
             WHERE upp.FORpage = ? AND upp.FORuser = ? AND perm.role_name = 'co_owner'
         ");
-        $stmt->bind_param("ii", $pageId, $userId);
-        $stmt->execute();
+        $stmt->bind_param("ii", $pageId, $userId);$stmt->execute();
         return (bool)$stmt->get_result()->fetch_assoc();
     }
 
     /**
-     * Hämtar en sida utan åtkomstkontroll (för existenskontroller och behörighetslogik).
+     * Låter en Admin direkt ge ägarskapet (owner) på en sida till en annan användare.
+     */
+    public function transferPageOwnership(int $pageId, int $newOwnerId): bool {$page = $this->getPage($pageId);
+        if (!$page) {
+            return false;
+        }
+
+        $wikiId = (int)$page['service_page_id'];
+
+        $this->conn->begin_transaction();
+        try {
+            $stmtUpd =$this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $newOwnerId, $pageId);$stmtUpd->execute();
+
+            // Rensa eventuell gammal editor/co_owner-rad för den nya ägaren
+            $stmtDelUpp =$this->conn->prepare("DELETE FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
+            $stmtDelUpp->bind_param("ii", $pageId, $newOwnerId);$stmtDelUpp->execute();
+
+            $stmtDelEd =$this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
+            $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);$stmtDelEd->execute();
+
+            $this->conn->commit();
+            return true;
+        } catch (Exception $e) {$this->conn->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * Tar bort ägarskapet (FORuser) från en sida (vid borttagning av ownership eller om ägare bannas/raderas):
+     * 1. Om det finns en aktiv co_owner (ej banned/deleted_user) på sidan blir den äldsta co_owner ny owner.
+     * 2. Om ingen co_owner finns sätts FORuser till 'deleted_user'.
+     */
+    public function removePageOwnership(int $pageId): array {
+        $stmtPage =$this->conn->prepare("
+            SELECT p.ID AS page_id, sub.ID AS service_page_id
+            FROM page p
+            JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
+            WHERE p.ID = ?
+        ");
+        $stmtPage->bind_param("i", $pageId);$stmtPage->execute();
+        $page =$stmtPage->get_result()->fetch_assoc();
+
+        if (!$page) {
+            return ['new_owner_id' => null, 'promoted_from' => 'not_found'];
+        }
+
+        $wikiId = (int)$page['service_page_id'];
+
+        $this->conn->begin_transaction();
+        try {
+            // Hitta äldsta giltiga co_owner (som inte är banned eller deleted_user)
+            $stmtCo =$this->conn->prepare("
+                SELECT upp.ID AS upp_id, upp.FORuser AS co_owner_id
+                FROM user_permission_page upp
+                JOIN permission perm ON upp.FORpermission = perm.ID
+                JOIN `user` u ON upp.FORuser = u.ID
+                JOIN role r ON u.FORrole = r.ID
+                WHERE upp.FORpage = ?
+                  AND perm.role_name = 'co_owner'
+                  AND u.username <> 'deleted_user'
+                  AND r.role_name <> 'banned'
+                ORDER BY upp.ID ASC
+                LIMIT 1
+            ");
+            $stmtCo->bind_param("i", $pageId);$stmtCo->execute();
+            $coOwner =$stmtCo->get_result()->fetch_assoc();
+
+            if ($coOwner) {
+                $newOwnerId = (int)$coOwner['co_owner_id'];
+                $stmtUpd =$this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
+                $stmtUpd->bind_param("ii", $newOwnerId, $pageId);$stmtUpd->execute();
+
+                $stmtDelUpp =$this->conn->prepare("DELETE FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
+                $stmtDelUpp->bind_param("ii", $pageId, $newOwnerId);$stmtDelUpp->execute();
+
+                $stmtDelEd =$this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
+                $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);$stmtDelEd->execute();
+
+                $this->conn->commit();
+                return ['new_owner_id' => $newOwnerId, 'promoted_from' => 'co_owner'];
+            }
+
+            $deletedUserId =$this->getDeletedUserId();
+            $stmtUpd =$this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $deletedUserId, $pageId);$stmtUpd->execute();
+
+            $this->conn->commit();
+            return ['new_owner_id' => $deletedUserId, 'promoted_from' => 'deleted_user'];
+        } catch (Exception $e) {$this->conn->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * Om en sidas nuvarande ägare har blivit bannad eller är deleted_user men det finns en co_owner,
+     * flyttas ägarskapet automatiskt över till co_owner.
+     */
+    public function autoHealPageOwner(int $pageId): void {
+        $stmt =$this->conn->prepare("
+            SELECT p.FORuser, u.username, r.role_name
+            FROM page p
+            JOIN `user` u ON p.FORuser = u.ID
+            JOIN role r ON u.FORrole = r.ID
+            WHERE p.ID = ?
+        ");
+        $stmt->bind_param("i", $pageId);$stmt->execute();
+        $row =$stmt->get_result()->fetch_assoc();
+
+        if (!$row) {
+            return;
+        }
+
+        if ($row['role_name'] === 'banned' \vert{}\vert{}$row['username'] === 'deleted_user') {
+            $this->removePageOwnership($pageId);
+        }
+    }
+
+    /**
+     * Bannlyser en användare och flyttar automatiskt alla användarens wiki-sidor till co_owner (eller deleted_user).
+     */
+    public function banUserAndTransferWikis(int $targetUserId): int {$this->conn->query("INSERT IGNORE INTO role (ID, role_name) VALUES (4, 'banned')");
+        $stmtRole =$this->conn->prepare("SELECT ID FROM role WHERE role_name = 'banned' LIMIT 1");
+        $stmtRole->execute();
+        $bannedRoleId = (int)($stmtRole->get_result()->fetch_assoc()['ID'] ?? 4);
+
+        $stmtUpd =$this->conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
+        $stmtUpd->bind_param("ii", $bannedRoleId, $targetUserId);$stmtUpd->execute();
+
+        // Rensa aktiva inloggningssessioner för den bannade användaren
+        $stmtSess =$this->conn->prepare("DELETE FROM user_session WHERE FORuser = ?");
+        $stmtSess->bind_param("i", $targetUserId);$stmtSess->execute();
+
+        // Hitta alla wiki-sidor som ägs av den bannade användaren och överför till co_owner / deleted_user
+        $stmtPages =$this->conn->prepare("
+            SELECT p.ID
+            FROM page p
+            JOIN page_wiki pw ON pw.FORpage = p.ID
+            WHERE p.FORuser = ?
+        ");
+        $stmtPages->bind_param("i", $targetUserId);$stmtPages->execute();
+        $pages =$stmtPages->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        foreach ($pages as$pg) {
+            $this->removePageOwnership((int)$pg['ID']);
+        }
+
+        return count($pages);
+    }
+
+    /**
+     * ========================================================================
+     * SIDOR (CRUD, Sökning & Sortering)
+     * ========================================================================
      */
     public function getPage(int $pageId): ?array {
+        // Kontrollera först om ägaren blivit bannad/raderad så att co_owner tar över automatiskt
+        $this->autoHealPageOwner($pageId);
+
         $sql = "
-            SELECT p.ID AS page_id, p.titel, p.content, p.created_at, p.FORuser AS owner_id,
-                   sub.ID AS service_page_id, v.state AS visibility
+            SELECT p.ID AS page_id, p.titel, p.content, p.created_at,
+                   p.FORuser AS owner_id, u.username AS owner_username,
+                   sub.ID AS service_page_id, sub.FORwiki AS wiki_id, v.state AS visibility
             FROM page p
+            JOIN `user` u ON p.FORuser = u.ID
             JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
             JOIN visability v ON sub.FORvisability = v.ID
             WHERE p.ID = ?
         ";
-        $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param("i", $pageId);
-        $stmt->execute();
-        $page = $stmt->get_result()->fetch_assoc();
+        $stmt =$this->conn->prepare($sql);$stmt->bind_param("i", $pageId);$stmt->execute();
+        $page =$stmt->get_result()->fetch_assoc();
 
         if (!$page) {
             return null;
         }
 
-        $page['content'] = json_decode($page['content'], true);
+        $page['content'] = json_decode($page['content'], true);$page['pictures'] = $this->getPagePictures($pageId);
         return $page;
     }
 
-    /**
-     * Får $viewerId (null = ej identifierad) se sidan?
-     * Publika sidor: alla. Privata: ägare, admin/root_admin, editors och användare med sidrättighet.
-     */
     public function canViewPage(array $page, ?int $viewerId): bool {
         if ($page['visibility'] !== 'private') {
             return true;
         }
-        if ($viewerId === null || $viewerId <= 0) {
+        if ($viewerId === null \vert{}\vert{}$viewerId <= 0) {
             return false;
         }
-        if ((int)$page['owner_id'] === $viewerId || $this->isAdmin($viewerId)) {
+        if ((int)$page['owner_id'] ===$viewerId || $this->isAdmin($viewerId)) {
             return true;
         }
 
         if ($this->subTable === 'page_wiki') {
             $wikiId = (int)$page['service_page_id'];
-            $stmtEd = $this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-            $stmtEd->bind_param("ii", $wikiId, $viewerId);
-            $stmtEd->execute();
+            $stmtEd =$this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
+            $stmtEd->bind_param("ii", $wikiId, $viewerId);$stmtEd->execute();
             if ($stmtEd->get_result()->fetch_assoc()) {
                 return true;
             }
         }
 
         $pageId = (int)$page['page_id'];
-        $stmtPerm = $this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-        $stmtPerm->bind_param("ii", $pageId, $viewerId);
-        $stmtPerm->execute();
+        $stmtPerm =$this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
+        $stmtPerm->bind_param("ii", $pageId, $viewerId);$stmtPerm->execute();
         return (bool)$stmtPerm->get_result()->fetch_assoc();
     }
 
-    /**
-     * Som canViewPage men via sid-ID. Sidan finns inte -> false.
-     */
-    public function canViewPageId(int $pageId, ?int $viewerId): bool {
-        $page = $this->getPage($pageId);
-        return $page ? $this->canViewPage($page, $viewerId) : false;
+    public function canViewPageId(int $pageId, ?int $viewerId): bool {$page = $this->getPage($pageId);
+        return $page ? $this->canViewPage($page,$viewerId) : false;
     }
 
-    /**
-     * Hämtar en sida med åtkomstkontroll: null = finns ej, ['error' => 'FORBIDDEN'] = ej behörig.
-     */
-    public function getPageForViewer(int $pageId, ?int $viewerId): ?array {
-        $page = $this->getPage($pageId);
+    public function getPageForViewer(int $pageId, ?int $viewerId): ?array {$page = $this->getPage($pageId);
         if (!$page) {
             return null;
         }
-        if (!$this->canViewPage($page, $viewerId)) {
+        if (!$this->canViewPage($page,$viewerId)) {
             return ['error' => 'FORBIDDEN'];
         }
         return $page;
     }
 
-    /**
-     * Listar sidor som $viewerId får se: alla publika + privata där användaren är ägare/editor/har rättighet.
-     * Admin/root_admin ser alla.
-     */
-    public function listPages(?int $viewerId): array {
-        $select = "
-            SELECT p.ID AS page_id, p.titel, p.created_at, p.FORuser AS owner_id, v.state AS visibility
+    public function listPages(?int $viewerId, ?int $parentWikiId = null, string $search = '', string$sort = 'DESC'): array {
+        $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
+        $params = [];$types = '';
+
+        $sql = "
+            SELECT p.ID AS page_id, p.titel, p.created_at, p.FORuser AS owner_id,
+                   u.username AS owner_username, sub.FORwiki AS wiki_id, v.state AS visibility
             FROM page p
+            JOIN `user` u ON p.FORuser = u.ID
             JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
             JOIN visability v ON sub.FORvisability = v.ID
+            WHERE 1 = 1
         ";
 
-        if ($viewerId !== null && $viewerId > 0 && $this->isAdmin($viewerId)) {
-            $result = $this->conn->query($select . " ORDER BY p.created_at DESC");
-            return $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+        if (!($viewerId !== null && $viewerId > 0 && $this->isAdmin($viewerId))) {
+            if ($viewerId === null || $viewerId <= 0) {
+                $sql .= " AND v.state = 'public'";
+            } else {
+                $editorClause = ($this->subTable === 'page_wiki')
+                    ? "OR EXISTS (SELECT 1 FROM editor e WHERE e.FORpage_wiki = sub.ID AND e.FORuser = ?)"
+                    : "";
+                $sql .= " AND (
+                    v.state = 'public'
+                    OR p.FORuser = ?
+                    $editorClause
+                    OR EXISTS (SELECT 1 FROM user_permission_page upp WHERE upp.FORpage = p.ID AND upp.FORuser = ?)
+                )";
+                if ($this->subTable === 'page_wiki') {
+                    $params[] = $viewerId;
+                    $params[] = $viewerId;
+                    $params[] = $viewerId;
+                    $types .= 'iii';
+                } else {
+                    $params[] = $viewerId;
+                    $params[] = $viewerId;
+                    $types .= 'ii';
+                }
+            }
         }
 
-        if ($viewerId === null || $viewerId <= 0) {
-            $result = $this->conn->query($select . " WHERE v.state = 'public' ORDER BY p.created_at DESC");
-            return $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+        if ($parentWikiId !== null && $parentWikiId > 0) {
+            $sql .= " AND sub.FORwiki = ?";
+            $params[] = $parentWikiId;
+            $types .= 'i';
         }
 
-        $editorClause = ($this->subTable === 'page_wiki')
-            ? "OR EXISTS (SELECT 1 FROM editor e WHERE e.FORpage_wiki = sub.ID AND e.FORuser = ?)"
-            : "";
-        $sql = $select . "
-            WHERE v.state = 'public'
-               OR p.FORuser = ?
-               $editorClause
-               OR EXISTS (SELECT 1 FROM user_permission_page upp WHERE upp.FORpage = p.ID AND upp.FORuser = ?)
-            ORDER BY p.created_at DESC
-        ";
-        $params = ($this->subTable === 'page_wiki')
-            ? [$viewerId, $viewerId, $viewerId]
-            : [$viewerId, $viewerId];
+        if ($search !== '') {
+            $sql .= " AND (p.titel LIKE ? OR u.username LIKE ?)";
+            $like = '%' . $search . '%';
+            $params[] = $like;
+            $params[] = $like;
+            $types .= 'ss';
+        }
+
+        $sql .= " ORDER BY p.titel $order, p.created_at DESC";
+
         $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param(str_repeat('i', count($params)), ...$params);
+        if ($params) {
+            $stmt->bind_param($types, ...$params);
+        }
         $stmt->execute();
         return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     }
 
-    /**
-     * Skapar en sida i databasen. Kastar InvalidArgumentException vid ogiltig synlighet.
-     */
-    public function createPage(string $title, mixed $content, int $userId, string $visibility = 'public'): int {
+    public function createPage(
+        string $title,
+        mixed $content,
+        int $userId,
+        string $visibility = 'public',
+        ?int $wikiId = null,
+        array $pictures = []
+    ): int {
         $normalized = $this->normalizeVisibility($visibility);
         if ($normalized === null) {
-            throw new InvalidArgumentException('Ogiltig visibility. Använd "public" eller "private"');
+            throw new InvalidArgumentException('Invalid visibility');
         }
         $visibilityId = ($normalized === 'private') ? 2 : 1;
         $contentJson = json_encode($content, JSON_UNESCAPED_UNICODE);
 
         $this->conn->begin_transaction();
         try {
-            $stmtPage = $this->conn->prepare("INSERT INTO page (titel, content, FORuser) VALUES (?, ?, ?)");
-            $stmtPage->bind_param("ssi", $title, $contentJson, $userId);
-            $stmtPage->execute();
+            $stmtPage =$this->conn->prepare("INSERT INTO page (titel, content, FORuser) VALUES (?, ?, ?)");
+            $stmtPage->bind_param("ssi", $title,$contentJson, $userId);$stmtPage->execute();
             $pageId = (int)$this->conn->insert_id;
 
-            $sqlSub = "INSERT INTO " . $this->subTable . " (FORvisability, FORpage) VALUES (?, ?)";
-            $stmtSub = $this->conn->prepare($sqlSub);
-            $stmtSub->bind_param("ii", $visibilityId, $pageId);
+            if ($this->subTable === 'page_wiki') {
+                $stmtSub =$this->conn->prepare("INSERT INTO page_wiki (FORvisability, FORpage, FORwiki) VALUES (?, ?, ?)");
+                $stmtSub->bind_param("iii", $visibilityId, $pageId,$wikiId);
+            } else {
+                $stmtSub =$this->conn->prepare("INSERT INTO " . $this->subTable . " (FORvisability, FORpage) VALUES (?, ?)");
+                $stmtSub->bind_param("ii", $visibilityId,$pageId);
+            }
             $stmtSub->execute();
+
+            if (!empty($pictures)) {
+                $this->savePagePictures($pageId, $userId,$pictures);
+            }
 
             $this->conn->commit();
             return $pageId;
-        } catch (Exception $e) {
-            $this->conn->rollback();
+        } catch (Exception $e) {$this->conn->rollback();
             throw $e;
         }
     }
 
-    /**
-     * Uppdaterar titel/innehåll och sparar historik i `update_history` (old_text, removed_pic, FORuser).
-     */
-    public function updatePage(int $pageId, ?string $title, mixed $content, int $userId, ?string $removedPic = null): bool {
+    public function updatePage(
+        int $pageId,
+        ?string $title,
+        mixed $content,
+        int $userId,
+        ?string $removedPic = null,
+        array $addedPictures = []
+    ): bool {
         $this->conn->begin_transaction();
         try {
             $sqlOld = "
@@ -421,31 +623,36 @@ class PageModule {
                 JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
                 WHERE p.ID = ?
             ";
-            $stmtOld = $this->conn->prepare($sqlOld);
-            $stmtOld->bind_param("i", $pageId);
-            $stmtOld->execute();
-            $oldPage = $stmtOld->get_result()->fetch_assoc();
+            $stmtOld =$this->conn->prepare($sqlOld);$stmtOld->bind_param("i", $pageId);$stmtOld->execute();
+            $oldPage =$stmtOld->get_result()->fetch_assoc();
 
-            if (!$oldPage) {
-                $this->conn->rollback();
+            if (!$oldPage) {$this->conn->rollback();
                 return false;
+            }
+
+            $removedPicLabel = null;
+            if ($removedPic !== null && trim($removedPic) !== '') {
+                $removedPicLabel =$this->deletePictureByIdOrName($pageId, trim($removedPic));
+            }
+
+            if (!empty($addedPictures)) {
+                $this->savePagePictures($pageId, $userId,$addedPictures);
             }
 
             if ($this->subTable === 'page_wiki') {
                 $oldContentArr = json_decode($oldPage['content'], true);
                 if (is_array($oldContentArr)) {
-                    $oldContentArr['_page_id'] = $pageId;
+                    $oldContentArr['_page_id'] =$pageId;
                     $oldText = json_encode($oldContentArr, JSON_UNESCAPED_UNICODE);
                 } else {
-                    $oldText = $oldPage['content'];
+                    $oldText =$oldPage['content'];
                 }
 
-                $stmtHist = $this->conn->prepare("
+                $stmtHist =$this->conn->prepare("
                     INSERT INTO update_history (old_text, removed_pic, FORuser)
                     VALUES (?, ?, ?)
                 ");
-                $stmtHist->bind_param("ssi", $oldText, $removedPic, $userId);
-                $stmtHist->execute();
+                $stmtHist->bind_param("ssi", $oldText,$removedPicLabel, $userId);$stmtHist->execute();
             }
 
             $newTitle = $title ?? $oldPage['titel'];
@@ -453,38 +660,36 @@ class PageModule {
                 ? json_encode($content, JSON_UNESCAPED_UNICODE)
                 : $oldPage['content'];
 
-            $stmtUpd = $this->conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
-            $stmtUpd->bind_param("ssi", $newTitle, $newContent, $pageId);
-            $stmtUpd->execute();
+            $stmtUpd =$this->conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ssi", $newTitle,$newContent, $pageId);$stmtUpd->execute();
 
             $this->conn->commit();
             return true;
-        } catch (Exception $e) {
-            $this->conn->rollback();
+        } catch (Exception $e) {$this->conn->rollback();
             throw $e;
         }
     }
 
     public function deletePage(int $pageId): bool {
-        $stmtDel = $this->conn->prepare("DELETE FROM page WHERE ID = ?");
+        $stmtDel =$this->conn->prepare("DELETE FROM page WHERE ID = ?");
         $stmtDel->bind_param("i", $pageId);
         return $stmtDel->execute();
     }
 
     /**
      * ========================================================================
-     * KOMMENTARSHANTERING (delas mellan Wiki och Blogg via tabellen `comment`)
+     * KOMMENTARSHANTERING
      * ========================================================================
      */
-
-    public function getComments(int $pageId): array {
+    public function getComments(int $pageId, string $sort = 'ASC'): array {
+        $order = strtoupper($sort) === 'DESC' ? 'DESC' : 'ASC';
         $stmt = $this->conn->prepare("
             SELECT c.ID AS comment_id, c.content, c.created_at, c.last_update,
                    c.FORuser AS user_id, u.username, c.FORpage AS page_id
             FROM comment c
             JOIN `user` u ON c.FORuser = u.ID
             WHERE c.FORpage = ?
-            ORDER BY c.created_at ASC
+            ORDER BY c.created_at $order
         ");
         $stmt->bind_param("i", $pageId);
         $stmt->execute();

@@ -79,7 +79,7 @@ function rootLogin(mysqli $conn): void {
 
     $sessionKey = $providerData['session_key'];
     $services   = (int)($providerData['services'] ?? 0);
-    $expiresAt  = $providerData['expires_at'] ?? date('Y-m-d H:i:s', strtotime('+24 hours'));
+    $expiresAt  = date('Y-m-d H:i:s', strtotime('+30 minutes'));
 
     try {
         // Updates the root_users token, expiration date, and services bitmask

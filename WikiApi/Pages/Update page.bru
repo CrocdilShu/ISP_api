@@ -1,0 +1,22 @@
+meta {
+  name: Update page
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}/pages.php?id={{pageId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  id: {{pageId}}
+}
+
+body:json {
+  {
+    "titel": "Updated title",
+    "content": "Updated content"
+  }
+}

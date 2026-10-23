@@ -1,0 +1,16 @@
+meta {
+  name: List pages
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/pages.php?wiki_id={{wikiId}}&sort=DESC
+  body: none
+  auth: none
+}
+
+params:query {
+  wiki_id: {{wikiId}}
+  sort: DESC
+}

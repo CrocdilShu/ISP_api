@@ -1,0 +1,16 @@
+meta {
+  name: Remove ownership
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/permissions.php?page_id={{pageId}}&remove_ownership=1
+  body: none
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+  remove_ownership: 1
+}

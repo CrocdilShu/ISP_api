@@ -1,0 +1,15 @@
+meta {
+  name: Remove admin role
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/admins.php?user_id={{targetUserId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  user_id: {{targetUserId}}
+}

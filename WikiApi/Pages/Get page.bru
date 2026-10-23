@@ -1,0 +1,15 @@
+meta {
+  name: Get page
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/pages.php?id={{pageId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  id: {{pageId}}
+}

@@ -1,0 +1,23 @@
+meta {
+  name: 1 Company login
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{userUrl}}?action=rootLogin
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "{{companyUsername}}",
+    "password": "{{companyPassword}}"
+  }
+}
+
+docs {
+  Run this first if the root_user row has expired or is missing.
+  ASSUMED: url/action name and body fields - adjust to match user.php rootLogin.
+}

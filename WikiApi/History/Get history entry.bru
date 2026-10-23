@@ -1,0 +1,15 @@
+meta {
+  name: Get history entry
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/history.php?id={{historyId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  id: {{historyId}}
+}

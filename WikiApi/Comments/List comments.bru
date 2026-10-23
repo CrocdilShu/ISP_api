@@ -1,0 +1,16 @@
+meta {
+  name: List comments
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/comments.php?page_id={{pageId}}&sort=ASC
+  body: none
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+  sort: ASC
+}

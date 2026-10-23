@@ -1,0 +1,20 @@
+meta {
+  name: Create page
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/pages.php
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "titel": "Test page",
+    "content": "Hello",
+    "visibility": "public",
+    "wiki_id": "{{wikiId}}"
+  }
+}

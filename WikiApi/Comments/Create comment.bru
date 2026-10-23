@@ -1,0 +1,21 @@
+meta {
+  name: Create comment
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/comments.php?page_id={{pageId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+}
+
+body:json {
+  {
+    "content": "Nice page"
+  }
+}

@@ -1,0 +1,16 @@
+meta {
+  name: History by page
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/history.php?page_id={{pageId}}&sort=DESC
+  body: none
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+  sort: DESC
+}

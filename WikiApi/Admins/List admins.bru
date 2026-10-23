@@ -1,0 +1,15 @@
+meta {
+  name: List admins
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/admins.php?sort=ASC
+  body: none
+  auth: none
+}
+
+params:query {
+  sort: ASC
+}

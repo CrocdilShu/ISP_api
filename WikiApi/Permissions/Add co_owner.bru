@@ -1,0 +1,22 @@
+meta {
+  name: Add co_owner
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/permissions.php?page_id={{pageId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+}
+
+body:json {
+  {
+    "user_id": "{{targetUserId}}",
+    "role": "co_owner"
+  }
+}

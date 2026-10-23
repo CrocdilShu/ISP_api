@@ -1,0 +1,22 @@
+meta {
+  name: Add editor
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/permissions.php?page_id={{pageId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+}
+
+body:json {
+  {
+    "user_id": "{{targetUserId}}",
+    "role": "editor"
+  }
+}

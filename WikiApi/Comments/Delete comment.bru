@@ -1,0 +1,15 @@
+meta {
+  name: Delete comment
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/comments.php?id={{commentId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  id: {{commentId}}
+}

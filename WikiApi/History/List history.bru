@@ -1,0 +1,15 @@
+meta {
+  name: List history
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/history.php?sort=DESC
+  body: none
+  auth: none
+}
+
+params:query {
+  sort: DESC
+}

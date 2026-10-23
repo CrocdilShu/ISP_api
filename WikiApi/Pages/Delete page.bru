@@ -1,0 +1,15 @@
+meta {
+  name: Delete page
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/pages.php?id={{pageId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  id: {{pageId}}
+}

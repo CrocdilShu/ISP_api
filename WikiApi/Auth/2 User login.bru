@@ -1,0 +1,29 @@
+meta {
+  name: 2 User login
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{userUrl}}?action=login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "{{username}}",
+    "password": "{{password}}"
+  }
+}
+
+script:post-response {
+  if (res.body && res.body.user_token) {
+    bru.setEnvVar("userToken", res.body.user_token);
+  }
+}
+
+docs {
+  Saves user_token into the environment so every wiki request uses it.
+  ASSUMED: url/action name and body fields - adjust to match user.php loginUser.
+}

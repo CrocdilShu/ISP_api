@@ -95,6 +95,7 @@ function cleanText255($raw, string $field): ?string {
 function getUser(mysqli $conn): void {
     requireMethod('GET');
 
+unset($u);
     // optional login: decides what the caller may see
     $acting = actingUserRow($conn, false);
     $actingId = $acting ? (int)$acting['ID'] : 0;

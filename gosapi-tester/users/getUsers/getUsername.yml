@@ -1,0 +1,23 @@
+info:
+  name: getUsername
+  type: http
+  seq: 2
+
+http:
+  method: GET
+  url: "{{baseUrl}}user/user.php?action=getUser&username=user_2"
+  params:
+    - name: action
+      value: getUser
+      type: query
+    - name: username
+      value: user_2
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

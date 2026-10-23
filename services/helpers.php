@@ -301,27 +301,30 @@ function resolveEventId(mysqli $conn, array $data): int {
         respond(400, ['error' => 'Either event_id or title is required to identify the event.']);
     }
 
+    // Use LIKE with '%' for prefix search
+    $titleParam = $title . '%';
+
     if ($creatorEmail !== '') {
         $event = fetchOne(
             $conn,
             'SELECT e.ID FROM calender_event e 
-             JOIN page p ON p.ID = e.ID 
-             JOIN user u ON u.ID = p.FORuser 
-             WHERE p.titel = ? AND u.email = ?',
-            [$title, $creatorEmail]
+                JOIN page p ON p.ID = e.ID 
+                JOIN user u ON u.ID = p.FORuser 
+                WHERE p.titel LIKE ? AND u.email = ?',
+            [$titleParam, $creatorEmail]
         );
     } else {
         $event = fetchOne(
             $conn,
             'SELECT e.ID FROM calender_event e 
-             JOIN page p ON p.ID = e.ID 
-             WHERE p.titel = ?',
-            [$title]
+                JOIN page p ON p.ID = e.ID 
+                WHERE p.titel LIKE ?',
+            [$titleParam]
         );
     }
 
     if (!$event) {
-        respond(404, ['error' => 'Event not found matching the specified title and creator.']);
+        respond(404, ['error' => 'Event not found matching the specified title prefix and creator.']);
     }
 
     return (int)$event['ID'];

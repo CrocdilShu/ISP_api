@@ -1,6 +1,6 @@
 name: data
 variables:
-  - name: X-User-Token
-    value: 9663023aa8761a6004a0086a13d65b5cbdbb2d3d25a6cdf8dcd38adde3796ea9
   - name: baseUrl
-    value: https://gosapi.ddev.site:8443/services/wiki/
+    value: https://gosapi.ddev.site:8443/services/
+  - name: X-User-Token
+    value: e55036424e4ce6e3075c566056aa5c3ee7e569046390fdfb84c6ea414d34d160

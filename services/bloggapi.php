@@ -28,7 +28,7 @@ switch ($method) {
             // Hämta inlägget via vår vanliga logik eller PageModule
             $stmt = $conn->prepare("
                 SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
-                       p.titel, p.content, p.created_at, p.FORuser, u.username AS author
+                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
                 FROM page_blog pb 
                 JOIN page p ON pb.FORpage = p.ID 
                 LEFT JOIN user u ON u.ID = p.FORuser
@@ -54,7 +54,7 @@ switch ($method) {
         } else {
             $result = $conn->query("
                 SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
-                       p.titel, p.content, p.created_at, p.FORuser, u.username AS author
+                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
                 FROM page_blog pb 
                 JOIN page p ON pb.FORpage = p.ID
                 LEFT JOIN user u ON u.ID = p.FORuser

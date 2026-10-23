@@ -361,3 +361,68 @@ function resolveUserId($conn, $identifier): int {
     }
     return 0;
 }
+
+//---------------------------------------------------------------------------------------------------
+// Uploads a profile picture to the 'img/' directory.
+// 
+// @param array $file The $_FILES['pfp_file'] array item.
+// @param string|null $old_pfp_path Optional existing path to delete upon replacement.
+// @return string Returns the relative path to the uploaded file (e.g., "img/pfp_65a123f.png").
+// @throws Exception If upload fails, file type is invalid, or size exceeds limit.
+//------------------------------------------------------------------------------------------------
+function uploadProfilePicture(array $file, ?string $old_pfp_path = null): string {
+    // 1. Check for PHP upload errors
+    if (!isset($file['error']) || is_array($file['error'])) {
+        throw new Exception("Invalid file parameter.");
+    }
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        throw new Exception("File upload failed with error code " . $file['error']);
+    }
+
+    // 2. Validate file size (e.g., max 5MB)
+    if ($file['size'] > 5 * 1024 * 1024) {
+        throw new Exception("File size exceeds 5MB limit.");
+    }
+
+    // 3. Validate image MIME type (do not rely purely on file extension)
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime_type = $finfo->file($file['tmp_name']);
+    
+    $allowed_types = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp'
+    ];
+
+    if (!array_key_exists($mime_type, $allowed_types)) {
+        throw new Exception("Invalid file format. Only JPG, PNG, and WEBP are allowed.");
+    }
+
+    // 4. Ensure the target 'img/' folder exists
+    $upload_dir = __DIR__ . '/../img/'; // Adjust path to point to your root 'img/' directory
+    if (!is_dir($upload_dir)) {
+        mkdir($upload_dir, 0755, true);
+    }
+
+    // 5. Generate a unique filename to prevent overwrites
+    $extension = $allowed_types[$mime_type];
+    $filename = sprintf('pfp_%s.%s', bin2hex(random_bytes(8)), $extension);
+    $target_filepath = $upload_dir . $filename;
+
+    // 6. Move uploaded file from temp directory to target
+    if (!move_uploaded_file($file['tmp_name'], $target_filepath)) {
+        throw new Exception("Failed to move uploaded file.");
+    }
+
+    // 7. Delete the old picture file if updating and an old file exists
+    if ($old_pfp_path) {
+        $old_full_path = __DIR__ . '/../' . ltrim($old_pfp_path, '/');
+        if (file_exists($old_full_path) && is_file($old_full_path)) {
+            @unlink($old_full_path);
+        }
+    }
+
+    // Return the relative path to store in the database
+    return 'img/' . $filename;
+}

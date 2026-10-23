@@ -2,3 +2,5 @@ name: data
 variables:
   - name: baseUrl
     value: https://gosapi.ddev.site:8443/services/
+  - name: X-User-Token
+    value: ecece245eb9225fc1fb7d853ef3d4b1a7598ab070467107a910244c71d591631

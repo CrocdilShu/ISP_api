@@ -5,15 +5,26 @@ info:
 
 http:
   method: POST
-  url: "{{baseUrl}}calender/calender.php?action=respondToInvite"
+  url: https://gosapi.ddev.site/services/user/user.php?action=loginUser
   params:
     - name: action
       value: respondToInvite
       type: query
   body:
     type: json
-    data: ""
-  auth: inherit
+    data: |-
+      {
+        "email": "root@admin.com",
+        "password": "adminpassword"
+      }
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        let data = res.getBody();
+
+        bru.setEnvVar("X-User-Token", data.user_token);
 
 settings:
   encodeUrl: true

@@ -1,0 +1,26 @@
+info:
+  name: Ta bort Kommentarer
+  type: http
+  seq: 4
+
+http:
+  method: DELETE
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=deleteComment
+  params:
+    - name: action
+      value: deleteComment
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "comment_id": 11
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

@@ -1,0 +1,16 @@
+meta {
+  name: History by user
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/history.php?user_id={{targetUserId}}&sort=DESC
+  body: none
+  auth: none
+}
+
+params:query {
+  user_id: {{targetUserId}}
+  sort: DESC
+}

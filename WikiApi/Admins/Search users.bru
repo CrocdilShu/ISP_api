@@ -1,0 +1,16 @@
+meta {
+  name: Search users
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/admins.php?search=abc&sort=ASC
+  body: none
+  auth: none
+}
+
+params:query {
+  search: abc
+  sort: ASC
+}

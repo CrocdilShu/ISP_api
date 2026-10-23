@@ -1,0 +1,23 @@
+meta {
+  name: Create wiki
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/pages.php?type=wiki
+  body: json
+  auth: none
+}
+
+params:query {
+  type: wiki
+}
+
+body:json {
+  {
+    "titel": "Test wiki",
+    "description": "Created from Bruno",
+    "visibility": "public"
+  }
+}

@@ -1,0 +1,16 @@
+meta {
+  name: Remove permission
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/permissions.php?page_id={{pageId}}&user_id={{targetUserId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  page_id: {{pageId}}
+  user_id: {{targetUserId}}
+}

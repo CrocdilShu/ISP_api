@@ -1,0 +1,27 @@
+info:
+  name: Redigera Kommentar
+  type: http
+  seq: 3
+
+http:
+  method: PUT
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=updateComment
+  params:
+    - name: action
+      value: updateComment
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "comment_id": 3,
+        "comment": "Det här är den uppdaterade texten på kommentaren!"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

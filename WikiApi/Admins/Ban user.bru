@@ -1,0 +1,21 @@
+meta {
+  name: Ban user
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/admins.php?user_id={{targetUserId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  user_id: {{targetUserId}}
+}
+
+body:json {
+  {
+    "role": "banned"
+  }
+}

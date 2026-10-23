@@ -1,0 +1,21 @@
+meta {
+  name: Edit comment
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/comments.php?id={{commentId}}
+  body: json
+  auth: none
+}
+
+params:query {
+  id: {{commentId}}
+}
+
+body:json {
+  {
+    "content": "Edited comment"
+  }
+}

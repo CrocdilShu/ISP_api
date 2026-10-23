@@ -20,106 +20,31 @@ class PageModule {
 
     /**
      * ========================================================================
-     * BILDHANTERING & FÖLJARSTRUKTUR (services/wiki/pics)
+     * BILDHANTERING I DATABASEN (Tabellen `picture`)
      * ========================================================================
      */
-    private function getWikiPicsBaseDir(): string {
-        $dir = dirname(__DIR__) . '/wiki/pics';
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
-        }
-        return $dir;
-    }
-
-    private function wikiPicWrite(string $subPath, array $item): string {
-        $baseDir = $this->getWikiPicsBaseDir();
-        $targetDir = $baseDir . '/' . ltrim($subPath, '/');
-        
-        if (!is_dir($targetDir)) {
-            mkdir($targetDir, 0755, true);
-        }
-
-        $filename = $item['filename'] ?? ('image_' . uniqid('', true) . '.png');
-        $filename = basename($filename);
-        $filePath = $targetDir . '/' . $filename;
-        $relativePath = ltrim($subPath, '/') . '/' . $filename;
-
-        if (isset($item['tmp_name']) && file_exists($item['tmp_name'])) {
-            move_uploaded_file($item['tmp_name'], $filePath);
-        } else {
-            $data = $item['data'] ?? ($item['image_data'] ?? '');
-            if (!empty($data)) {
-                if (preg_match('/^data:image\/(\w+);base64,/', $data)) {
-                    $data = substr($data, strpos($data, ',') + 1);
-                    $data = base64_decode($data);
-                }
-                file_put_contents($filePath, $data);
-            } else {
-                if (!file_exists($filePath)) {
-                    file_put_contents($filePath, '');
-                }
-            }
-        }
-
-        return $relativePath;
-    }
-
-    private function wikiPicDeleteFile(string $filePath): void {
-        $baseDir = $this->getWikiPicsBaseDir();
-        $fullPath = $baseDir . '/' . ltrim($filePath, '/');
-        if (file_exists($fullPath) && is_file($fullPath)) {
-            @unlink($fullPath);
-        }
-    }
-
-    private function wikiPicDeleteDir(string $subPath): void {
-        $baseDir = $this->getWikiPicsBaseDir();
-        $targetDir = $baseDir . '/' . ltrim($subPath, '/');
-        
-        if (is_dir($targetDir)) {
-            $files = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($targetDir, \RecursiveDirectoryIterator::SKIP_DOTFILES),
-                \RecursiveIteratorIterator::CHILD_FIRST
-            );
-            foreach ($files as $file) {
-                if ($file->isDir()) {
-                    @rmdir($file->getRealPath());
-                } else {
-                    @unlink($file->getRealPath());
-                }
-            }
-            @rmdir($targetDir);
-        }
-    }
-
-    public function savePagePictures(int $pageId, int $userId, array $items): void {
+    public function savePagePictures(int $pageId, int $userId, array $pictures): void {
         $stmt = $this->conn->prepare("
             INSERT INTO picture (filename, mime_type, image_data, FORpage, FORuser)
             VALUES (?, ?, ?, ?, ?)
         ");
-        foreach ($items as $item) {
-            if (is_string($item)) {
-                $filename = basename($item);
-                $path = 'pages/' . $pageId . '/' . $filename;
-                $fullDir = $this->getWikiPicsBaseDir() . '/pages/' . $pageId;
-                if (!is_dir($fullDir)) {
-                    mkdir($fullDir, 0755, true);
-                }
-                $fullPath = $fullDir . '/' . $filename;
-                if (!file_exists($fullPath)) {
-                    file_put_contents($fullPath, '');
-                }
-                $mime = 'image/png';
-                $data = '';
+        foreach ($pictures as $pic) {
+            if (is_string($pic)) {
+                $filename = basename($pic);
+                $mimeType = 'image/jpeg';
+                $data = $pic;
             } else {
-                $path = $this->wikiPicWrite('pages/' . $pageId, $item);
-                $filename = $item['filename'] ?? basename($path);
-                $mime = $item['mime'] ?? ($item['mime_type'] ?? 'image/png');
-                $data = $item['data'] ?? ($item['image_data'] ?? '');
+                if (!is_array($pic) || (empty($pic['data']) && empty($pic['image_data']))) { 
+                    continue; 
+                }
+                $filename = trim((string)($pic['filename'] ?? 'image.png'));
+                $mimeType = trim((string)($pic['mime_type'] ?? 'image/jpeg'));
+                $data = (string)($pic['data'] ?? $pic['image_data']);
             }
-            $stmt->bind_param("sssii", $filename, $mime, $data, $pageId, $userId);
+            $stmt->bind_param("sssii", $filename, $mimeType, $data, $pageId, $userId);
             $stmt->execute();
         }
+        $stmt->close();
     }
 
     public function getPagePictures(int $pageId): array {
@@ -131,30 +56,37 @@ class PageModule {
         ");
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
-        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $res = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        return $res;
     }
 
     public function deletePictureByIdOrName(int $pageId, string $identifier): ?string {
         if (ctype_digit($identifier)) {
-            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE ID = ? AND FORpage = ?");
             $picId = (int)$identifier;
+            $stmt = $this->conn->prepare("SELECT filename FROM picture WHERE ID = ? AND FORpage = ?");
             $stmt->bind_param("ii", $picId, $pageId);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            if ($row) {
+                $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ? AND FORpage = ?");
+                $del->bind_param("ii", $picId, $pageId);
+                $del->execute();
+                $del->close();
+                return $row['filename'];
+            }
         } else {
-            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE filename = ? AND FORpage = ?");
-            $stmt->bind_param("si", $identifier, $pageId);
-        }
-        $stmt->execute();
-        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        foreach ($rows as $row) {
-            $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ?");
-            $rowId = (int)$row['ID'];
-            $del->bind_param("i", $rowId);
+            $del = $this->conn->prepare("DELETE FROM picture WHERE filename = ? AND FORpage = ?");
+            $del->bind_param("si", $identifier, $pageId);
             $del->execute();
-            
-            // Remove physical file
-            $this->wikiPicDeleteFile('pages/' . $pageId . '/' . $row['filename']);
+            $affected = $del->affected_rows;
+            $del->close();
+            if ($affected > 0) {
+                return $identifier;
+            }
         }
-        return $rows ? $rows[0]['filename'] : $identifier;
+        return $identifier;
     }
 
     /**
@@ -193,6 +125,7 @@ class PageModule {
         $stmt->bind_param("s", $tokenHash);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
 
         if (!$row) {
             return null;
@@ -209,6 +142,7 @@ class PageModule {
         $stmt = $this->conn->prepare("SELECT ID FROM `user` WHERE username = 'deleted_user' LIMIT 1");
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
         if ($row) {
             return (int)$row['ID'];
         }
@@ -220,7 +154,9 @@ class PageModule {
         ");
         $stmtIns->bind_param("s", $dummyHash);
         $stmtIns->execute();
-        return (int)$this->conn->insert_id;
+        $insertId = (int)$this->conn->insert_id;
+        $stmtIns->close();
+        return $insertId;
     }
 
     public function userExists(int $userId): bool {
@@ -233,7 +169,9 @@ class PageModule {
         ");
         $stmt->bind_param("i", $userId);
         $stmt->execute();
-        return (bool)$stmt->get_result()->fetch_assoc();
+        $res = (bool)$stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        return $res;
     }
 
     public function getUserRole(int $userId): string {
@@ -245,7 +183,9 @@ class PageModule {
         ");
         $stmtRole->bind_param("i", $userId);
         $stmtRole->execute();
-        return $stmtRole->get_result()->fetch_assoc()['role_name'] ?? 'user';
+        $role = $stmtRole->get_result()->fetch_assoc()['role_name'] ?? 'user';
+        $stmtRole->close();
+        return $role;
     }
 
     public function isAdmin(int $userId): bool {
@@ -266,127 +206,7 @@ class PageModule {
 
     /**
      * ========================================================================
-     * ÖVERORDNADE WIKIS (Sub-wikis som t.ex. "Wikipedia" eller "Fandom")
-     * ========================================================================
-     */
-    public function createWikiSpace(string $title, ?string $description, int $userId, string $visibility = 'public'): int {
-        $normalized = $this->normalizeVisibility($visibility);
-        if ($normalized === null) {
-            throw new InvalidArgumentException('Invalid visibility');
-        }
-        $visId = ($normalized === 'private') ? 2 : 1;
-
-        $stmt = $this->conn->prepare("
-            INSERT INTO wiki (titel, description, FORuser, FORvisability)
-            VALUES (?, ?, ?, ?)
-        ");
-        $stmt->bind_param("ssii", $title, $description, $userId, $visId);
-        $stmt->execute();
-        return (int)$this->conn->insert_id;
-    }
-
-    public function listWikiSpaces(?int $viewerId, string $search = '', string $sort = 'DESC'): array {
-        $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
-        $params = [];
-        $types = '';
-
-        $sql = "
-            SELECT w.ID AS wiki_id, w.titel, w.description, w.created_at,
-                   w.FORuser AS owner_id, u.username AS owner_username, v.state AS visibility
-            FROM wiki w
-            JOIN `user` u ON w.FORuser = u.ID
-            JOIN visability v ON w.FORvisability = v.ID
-            WHERE 1 = 1
-        ";
-
-        if (!($viewerId && $this->isAdmin($viewerId))) {
-            if ($viewerId && $viewerId > 0) {
-                $sql .= " AND (v.state = 'public' OR w.FORuser = ?)";
-                $params[] = $viewerId;
-                $types .= 'i';
-            } else {
-                $sql .= " AND v.state = 'public'";
-            }
-        }
-
-        if ($search !== '') {
-            $sql .= " AND (w.titel LIKE ? OR w.description LIKE ? OR u.username LIKE ?)";
-            $like = '%' . $search . '%';
-            $params[] = $like;
-            $params[] = $like;
-            $params[] = $like;
-            $types .= 'sss';
-        }
-
-        $sql .= " ORDER BY w.titel $order, w.created_at DESC";
-
-        $stmt = $this->conn->prepare($sql);
-        if ($params) {
-            $stmt->bind_param($types, ...$params);
-        }
-        $stmt->execute();
-        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    }
-
-    /**
-     * ========================================================================
-     * BILDHANTERING I DATABASEN (Tabellen `picture`)
-     * ========================================================================
-     */
-    public function savePagePictures(int $pageId, int $userId, array $pictures): void {
-        $stmt = $this->conn->prepare("
-            INSERT INTO picture (filename, mime_type, image_data, FORpage, FORuser)
-            VALUES (?, ?, ?, ?, ?)
-        ");
-        foreach ($pictures as $pic) {
-            if (!is_array($pic) || empty($pic['data'])) { continue; }
-            $filename = trim((string)($pic['filename'] ?? 'image.png'));
-            $mimeType = trim((string)($pic['mime_type'] ?? 'image/png'));
-            $data = (string)$pic['data'];
-            $stmt->bind_param("sssii", $filename, $mimeType, $data, $pageId, $userId);
-            $stmt->execute();
-        }
-    }
-
-    public function getPagePictures(int $pageId): array {
-        $stmt = $this->conn->prepare("
-            SELECT ID AS picture_id, filename, mime_type, image_data, created_at, FORuser AS uploaded_by
-            FROM picture
-            WHERE FORpage = ?
-            ORDER BY ID ASC
-        ");
-        $stmt->bind_param("i", $pageId);
-        $stmt->execute();
-        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    }
-
-    public function deletePictureByIdOrName(int $pageId, string $identifier): ?string {
-        if (ctype_digit($identifier)) {
-            $picId = (int)$identifier;
-            $stmt = $this->conn->prepare("SELECT filename FROM picture WHERE ID = ? AND FORpage = ?");
-            $stmt->bind_param("ii", $picId, $pageId);
-            $stmt->execute();
-            $row = $stmt->get_result()->fetch_assoc();
-            if ($row) {
-                $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ? AND FORpage = ?");
-                $del->bind_param("ii", $picId, $pageId);
-                $del->execute();
-                return $row['filename'];
-            }
-        } else {
-            $del = $this->conn->prepare("DELETE FROM picture WHERE filename = ? AND FORpage = ?");
-            $del->bind_param("si", $identifier, $pageId);
-            $del->execute();
-            if ($del->affected_rows > 0) {
-                return $identifier;
-            }
-        }
-        return $identifier;
-    }
-
-    /**
-     * ========================================================================
-     * SIDBEHÖRIGHETER & ÄGARSKAPSÖVERFÖRING (Owner / Co-Owner / Admin / Banned)
+     * SIDBEHÖRIGHETER & ÄGARSKAPSÖVERFÖRING
      * ========================================================================
      */
     public function canModify(int $pageId, int $userId, bool $requireOwnerOrAdmin = false): bool {
@@ -404,6 +224,7 @@ class PageModule {
         $stmtPage->bind_param("i", $pageId);
         $stmtPage->execute();
         $page = $stmtPage->get_result()->fetch_assoc();
+        $stmtPage->close();
 
         if (!$page) {
             return false;
@@ -422,7 +243,9 @@ class PageModule {
             $stmtEditor = $this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
             $stmtEditor->bind_param("ii", $wikiId, $userId);
             $stmtEditor->execute();
-            if ($stmtEditor->get_result()->fetch_assoc()) {
+            $res = (bool)$stmtEditor->get_result()->fetch_assoc();
+            $stmtEditor->close();
+            if ($res) {
                 return true;
             }
         }
@@ -430,180 +253,12 @@ class PageModule {
         $stmtPerm = $this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
         $stmtPerm->bind_param("ii", $pageId, $userId);
         $stmtPerm->execute();
-        return (bool)$stmtPerm->get_result()->fetch_assoc();
-    }
-
-    public function canManagePermissions(int $pageId, int $userId): bool {
-        if ($this->canModify($pageId, $userId, true)) {
-            return true;
-        }
-
-        $stmt = $this->conn->prepare("
-            SELECT upp.ID
-            FROM user_permission_page upp
-            JOIN permission perm ON upp.FORpermission = perm.ID
-            WHERE upp.FORpage = ? AND upp.FORuser = ? AND perm.role_name = 'co_owner'
-        ");
-        $stmt->bind_param("ii", $pageId, $userId);
-        $stmt->execute();
-        return (bool)$stmt->get_result()->fetch_assoc();
-    }
-
-    public function transferPageOwnership(int $pageId, int $newOwnerId): bool {
-        $page = $this->getPage($pageId);
-        if (!$page) {
-            return false;
-        }
-
-        $wikiId = (int)($page['service_page_id'] ?? 0);
-
-        $this->conn->begin_transaction();
-        try {
-            $stmtUpd = $this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
-            $stmtUpd->bind_param("ii", $newOwnerId, $pageId);
-            $stmtUpd->execute();
-
-            $stmtDelUpp = $this->conn->prepare("DELETE FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-            $stmtDelUpp->bind_param("ii", $pageId, $newOwnerId);
-            $stmtDelUpp->execute();
-
-            if ($this->subTable === 'page_wiki') {
-                $stmtDelEd = $this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-                $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);
-                $stmtDelEd->execute();
-            }
-
-            $this->conn->commit();
-            return true;
-        } catch (Exception $e) {
-            $this->conn->rollback();
-            throw $e;
-        }
-    }
-
-    public function removePageOwnership(int $pageId): array {
-        $stmtPage = $this->conn->prepare("
-            SELECT p.ID AS page_id, sub.ID AS service_page_id
-            FROM page p
-            JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
-            WHERE p.ID = ?
-        ");
-        $stmtPage->bind_param("i", $pageId);
-        $stmtPage->execute();
-        $page = $stmtPage->get_result()->fetch_assoc();
-
-        if (!$page) {
-            return ['new_owner_id' => null, 'promoted_from' => 'not_found'];
-        }
-
-        $wikiId = (int)($page['service_page_id'] ?? 0);
-
-        $this->conn->begin_transaction();
-        try {
-            $stmtCo = $this->conn->prepare("
-                SELECT upp.ID AS upp_id, upp.FORuser AS co_owner_id
-                FROM user_permission_page upp
-                JOIN permission perm ON upp.FORpermission = perm.ID
-                JOIN `user` u ON upp.FORuser = u.ID
-                JOIN role r ON u.FORrole = r.ID
-                WHERE upp.FORpage = ?
-                  AND perm.role_name = 'co_owner'
-                  AND u.username <> 'deleted_user'
-                  AND r.role_name <> 'banned'
-                ORDER BY upp.ID ASC
-                LIMIT 1
-            ");
-            $stmtCo->bind_param("i", $pageId);
-            $stmtCo->execute();
-            $coOwner = $stmtCo->get_result()->fetch_assoc();
-
-            if ($coOwner) {
-                $newOwnerId = (int)$coOwner['co_owner_id'];
-                $stmtUpd = $this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
-                $stmtUpd->bind_param("ii", $newOwnerId, $pageId);
-                $stmtUpd->execute();
-
-                $stmtDelUpp = $this->conn->prepare("DELETE FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-                $stmtDelUpp->bind_param("ii", $pageId, $newOwnerId);
-                $stmtDelUpp->execute();
-
-                $stmtDelEd = $this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-                $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);
-                $stmtDelEd->execute();
-
-                $this->conn->commit();
-                return ['new_owner_id' => $newOwnerId, 'promoted_from' => 'co_owner'];
-            }
-
-            $deletedUserId = $this->getDeletedUserId();
-            $stmtUpd = $this->conn->prepare("UPDATE page SET FORuser = ? WHERE ID = ?");
-            $stmtUpd->bind_param("ii", $deletedUserId, $pageId);
-            $stmtUpd->execute();
-
-            $this->conn->commit();
-            return ['new_owner_id' => $deletedUserId, 'promoted_from' => 'deleted_user'];
-        } catch (Exception $e) {
-            $this->conn->rollback();
-            throw $e;
-        }
-    }
-
-    public function autoHealPageOwner(int $pageId): void {
-        $stmt = $this->conn->prepare("
-            SELECT p.FORuser, u.username, r.role_name
-            FROM page p
-            JOIN `user` u ON p.FORuser = u.ID
-            JOIN role r ON u.FORrole = r.ID
-            WHERE p.ID = ?
-        ");
-        $stmt->bind_param("i", $pageId);
-        $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-
-        if (!$row) {
-            return;
-        }
-
-        if ($row['role_name'] === 'banned' || $row['username'] === 'deleted_user') {
-            $this->removePageOwnership($pageId);
-        }
-    }
-
-    public function banUserAndTransferWikis(int $targetUserId): int {
-        $this->conn->query("INSERT IGNORE INTO role (ID, role_name) VALUES (4, 'banned')");
-        $stmtRole = $this->conn->prepare("SELECT ID FROM role WHERE role_name = 'banned' LIMIT 1");
-        $stmtRole->execute();
-        $bannedRoleId = (int)($stmtRole->get_result()->fetch_assoc()['ID'] ?? 4);
-
-        $stmtUpd = $this->conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
-        $stmtUpd->bind_param("ii", $bannedRoleId, $targetUserId);
-        $stmtUpd->execute();
-
-        $stmtSess = $this->conn->prepare("DELETE FROM user_session WHERE FORuser = ?");
-        $stmtSess->bind_param("i", $targetUserId);
-        $stmtSess->execute();
-
-        $stmtPages = $this->conn->prepare("
-            SELECT p.ID
-            FROM page p
-            JOIN page_wiki pw ON pw.FORpage = p.ID
-            WHERE p.FORuser = ?
-        ");
-        $stmtPages->bind_param("i", $targetUserId);
-        $stmtPages->execute();
-        $pages = $stmtPages->get_result()->fetch_all(MYSQLI_ASSOC);
-
-        foreach ($pages as $pg) {
-            $this->removePageOwnership((int)$pg['ID']);
-        }
-
-        return count($pages);
+        $res = (bool)$stmtPerm->get_result()->fetch_assoc();
+        $stmtPerm->close();
+        return $res;
     }
 
     public function getPage(int $pageId): ?array {
-        $this->autoHealPageOwner($pageId);
-
-        // Dynamisk kolumn beroende på om det är blogg eller wiki
         $relationCol = ($this->serviceType === 'blog') ? 'sub.FORblog AS blog_id' : 'sub.FORwiki AS wiki_id';
 
         $sql = "
@@ -620,6 +275,7 @@ class PageModule {
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
         $page = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
 
         if (!$page) {
             return null;
@@ -630,56 +286,11 @@ class PageModule {
         return $page;
     }
 
-    public function canViewPage(array $page, ?int $viewerId): bool {
-        if ($page['visibility'] !== 'private') {
-            return true;
-        }
-        if ($viewerId === null || $viewerId <= 0) {
-            return false;
-        }
-        if ((int)$page['owner_id'] === $viewerId || $this->isAdmin($viewerId)) {
-            return true;
-        }
-
-        if ($this->subTable === 'page_wiki') {
-            $wikiId = (int)$page['service_page_id'];
-            $stmtEd = $this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-            $stmtEd->bind_param("ii", $wikiId, $viewerId);
-            $stmtEd->execute();
-            if ($stmtEd->get_result()->fetch_assoc()) {
-                return true;
-            }
-        }
-
-        $pageId = (int)$page['page_id'];
-        $stmtPerm = $this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-        $stmtPerm->bind_param("ii", $pageId, $viewerId);
-        $stmtPerm->execute();
-        return (bool)$stmtPerm->get_result()->fetch_assoc();
-    }
-
-    public function canViewPageId(int $pageId, ?int $viewerId): bool {
-        $page = $this->getPage($pageId);
-        return $page ? $this->canViewPage($page, $viewerId) : false;
-    }
-
-    public function getPageForViewer(int $pageId, ?int $viewerId): ?array {
-        $page = $this->getPage($pageId);
-        if (!$page) {
-            return null;
-        }
-        if (!$this->canViewPage($page, $viewerId)) {
-            return ['error' => 'FORBIDDEN'];
-        }
-        return $page;
-    }
-
     public function listPages(?int $viewerId, ?int $parentWikiId = null, string $search = '', string $sort = 'DESC'): array {
         $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
         $params = [];
         $types = '';
 
-        // Dynamisk kolumn beroende på om det är blogg eller wiki
         $relationCol = ($this->serviceType === 'blog') ? 'sub.FORblog AS blog_id' : 'sub.FORwiki AS wiki_id';
 
         $sql = "
@@ -691,39 +302,6 @@ class PageModule {
             JOIN visability v ON sub.FORvisability = v.ID
             WHERE 1 = 1
         ";
-
-        if (!($viewerId !== null && $viewerId > 0 && $this->isAdmin($viewerId))) {
-            if ($viewerId === null || $viewerId <= 0) {
-                $sql .= " AND v.state = 'public'";
-            } else {
-                $editorClause = ($this->subTable === 'page_wiki')
-                    ? "OR EXISTS (SELECT 1 FROM editor e WHERE e.FORpage_wiki = sub.ID AND e.FORuser = ?)"
-                    : "";
-                $sql .= " AND (
-                    v.state = 'public'
-                    OR p.FORuser = ?
-                    $editorClause
-                    OR EXISTS (SELECT 1 FROM user_permission_page upp WHERE upp.FORpage = p.ID AND upp.FORuser = ?)
-                )";
-                if ($this->subTable === 'page_wiki') {
-                    $params[] = $viewerId;
-                    $params[] = $viewerId;
-                    $params[] = $viewerId;
-                    $types .= 'iii';
-                } else {
-                    $params[] = $viewerId;
-                    $params[] = $viewerId;
-                    $types .= 'ii';
-                }
-            }
-        }
-
-        if ($parentWikiId !== null && $parentWikiId > 0) {
-            $filterCol = ($this->serviceType === 'blog') ? 'sub.FORblog' : 'sub.FORwiki';
-            $sql .= " AND $filterCol = ?";
-            $params[] = $parentWikiId;
-            $types .= 'i';
-        }
 
         if ($search !== '') {
             $sql .= " AND (p.titel LIKE ? OR u.username LIKE ?)";
@@ -741,8 +319,8 @@ class PageModule {
         }
         $stmt->execute();
         $pages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
 
-        // Include pictures in list responses so listing pages shows them
         foreach ($pages as &$page) {
             $page['pictures'] = $this->getPagePictures((int)$page['page_id']);
         }
@@ -772,6 +350,7 @@ class PageModule {
             $stmtPage->bind_param("ssi", $title, $contentJson, $userId);
             $stmtPage->execute();
             $pageId = (int)$this->conn->insert_id;
+            $stmtPage->close();
 
             if ($this->subTable === 'page_wiki') {
                 $stmtSub = $this->conn->prepare("INSERT INTO page_wiki (FORvisability, FORpage, FORwiki) VALUES (?, ?, ?)");
@@ -781,6 +360,7 @@ class PageModule {
                 $stmtSub->bind_param("ii", $visibilityId, $pageId);
             }
             $stmtSub->execute();
+            $stmtSub->close();
 
             if (!empty($pictures)) {
                 $this->savePagePictures($pageId, $userId, $pictures);
@@ -814,36 +394,15 @@ class PageModule {
             $stmtOld->bind_param("i", $pageId);
             $stmtOld->execute();
             $oldPage = $stmtOld->get_result()->fetch_assoc();
+            $stmtOld->close();
 
             if (!$oldPage) {
                 $this->conn->rollback();
                 return false;
             }
 
-            $removedPicLabel = null;
-            if ($removedPic !== null && trim($removedPic) !== '') {
-                $removedPicLabel = $this->deletePictureByIdOrName($pageId, trim($removedPic));
-            }
-
             if (!empty($addedPictures)) {
                 $this->savePagePictures($pageId, $userId, $addedPictures);
-            }
-
-            if ($this->subTable === 'page_wiki') {
-                $oldContentArr = json_decode($oldPage['content'], true);
-                if (is_array($oldContentArr)) {
-                    $oldContentArr['_page_id'] = $pageId;
-                    $oldText = json_encode($oldContentArr, JSON_UNESCAPED_UNICODE);
-                } else {
-                    $oldText = $oldPage['content'];
-                }
-
-                $stmtHist = $this->conn->prepare("
-                    INSERT INTO update_history (old_text, removed_pic, FORuser)
-                    VALUES (?, ?, ?)
-                ");
-                $stmtHist->bind_param("ssi", $oldText, $removedPicLabel, $userId);
-                $stmtHist->execute();
             }
 
             $newTitle = $title ?? $oldPage['titel'];
@@ -854,6 +413,7 @@ class PageModule {
             $stmtUpd = $this->conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
             $stmtUpd->bind_param("ssi", $newTitle, $newContent, $pageId);
             $stmtUpd->execute();
+            $stmtUpd->close();
 
             $this->conn->commit();
             return true;
@@ -867,10 +427,7 @@ class PageModule {
         $stmtDel = $this->conn->prepare("DELETE FROM page WHERE ID = ?");
         $stmtDel->bind_param("i", $pageId);
         $ok = $stmtDel->execute();
-        if ($ok) {
-            // Automatically remove the physical folder and pictures when the page is deleted
-            $this->wikiPicDeleteDir('pages/' . $pageId);
-        }
+        $stmtDel->close();
         return $ok;
     }
 
@@ -879,7 +436,7 @@ class PageModule {
      * KOMMENTARSHANTERING
      * ========================================================================
      */
-public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = null): array {
+    public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = null): array {
         $order = strtoupper($sort) === 'DESC' ? 'DESC' : 'ASC';
         $sql = "
             SELECT c.ID AS comment_id, c.content, c.created_at, c.last_update,
@@ -898,6 +455,7 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
         $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
 
         foreach ($rows as &$row) {
             $row['content'] = json_decode($row['content'], true);
@@ -919,8 +477,10 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
         ");
         $stmt->bind_param("sii", $contentJson, $userId, $pageId);
         $stmt->execute();
+        $insertId = (int)$this->conn->insert_id;
+        $stmt->close();
 
-        return (int)$this->conn->insert_id;
+        return $insertId;
     }
 
     public function canModifyComment(int $commentId, int $userId): bool {
@@ -937,6 +497,7 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
         $stmt->bind_param("i", $commentId);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
 
         if (!$row) {
             return false;
@@ -944,8 +505,7 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
 
         return ((int)$row['comment_author'] === $userId) || ((int)$row['page_owner'] === $userId);
     }
-
-    public function updateComment(int $commentId, mixed $content): bool {
+public function updateComment(int $commentId, mixed $content): bool {
         if (!is_array($content)) {
             $content = ['text' => (string)$content];
         }
@@ -954,12 +514,16 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
         $stmt = $this->conn->prepare("UPDATE comment SET content = ? WHERE ID = ?");
         $stmt->bind_param("si", $contentJson, $commentId);
         $stmt->execute();
-        return $stmt->affected_rows >= 0;
+        $affected = $stmt->affected_rows >= 0;
+        $stmt->close();
+        return $affected;
     }
 
     public function deleteComment(int $commentId): bool {
         $stmt = $this->conn->prepare("DELETE FROM comment WHERE ID = ?");
         $stmt->bind_param("i", $commentId);
-        return $stmt->execute();
+        $ok = $stmt->execute();
+        $stmt->close();
+        return $ok;
     }
-}   
+}

@@ -10,15 +10,130 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../config/db.php';
-require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../helpers.php';
 require_once __DIR__ . '/common/PageModule.php';
 
-$method = $_SERVER['REQUEST_METHOD'];
+// =====================================================================
+// Hjälpfunktioner
+// =====================================================================
+
+/** Skickar JSON-svar och avslutar. */
+function respond(int $code, array $payload): void
+{
+    http_response_code($code);
+    echo json_encode($payload);
+    exit;
+}
+
+function respondError(int $code, string $message): void
+{
+    respond($code, ["status" => "error", "message" => $message]);
+}
+
+function respondSuccess(array $extra = []): void
+{
+    respond(200, array_merge(["status" => "success"], $extra));
+}
+
+/** Kräver inloggad användare. */
+function requireUser(?int $userId, string $message = "Obehörig. X-User-Token saknas eller är ogiltig."): void
+{
+    if (!$userId) {
+        respondError(401, $message);
+    }
+}
+
+/** Hämtar bloggens ägare (eller null om bloggen inte finns). */
+function fetchBlogOwnerId(mysqli $conn, int $blogId): ?int
+{
+    $stmt = $conn->prepare("SELECT FORuser FROM blog WHERE ID = ? LIMIT 1");
+    $stmt->bind_param("i", $blogId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return $row ? (int)$row['FORuser'] : null;
+}
+
+/** 404 om bloggen saknas, 403 om användaren inte äger den. */
+function assertBlogOwner(mysqli $conn, int $blogId, int $userId, string $forbiddenMessage): void
+{
+    $ownerId = fetchBlogOwnerId($conn, $blogId);
+
+    if ($ownerId === null) {
+        respondError(404, "Bloggen hittades inte");
+    }
+    if ($ownerId !== $userId) {
+        respondError(403, $forbiddenMessage);
+    }
+}
+
+/** Gör om "public"/"private" till visability-ID (1 = public, 2 = private). */
+function visibilityToId(PageModule $module, $visibility): int
+{
+    return $module->normalizeVisibility($visibility) === 'private' ? 2 : 1;
+}
+
+/** Läser en sträng ur en array, trimmad, aldrig null. */
+function inputString(array $data, string $key): string
+{
+    return trim((string)($data[$key] ?? ''));
+}
+
+/** Läser den verkliga MIME-typen från filens innehåll (inte från klienten). */
+function detectMimeType(string $path): string
+{
+    $mime = (new finfo(FILEINFO_MIME_TYPE))->file($path);
+    return $mime !== false ? $mime : 'application/octet-stream';
+}
+
+/**
+ * Fallback om saveUploadedImage inte redan finns i helpers.php.
+ * Returnerar relativ sökväg, t.ex. "uploads/abc123.jpg".
+ */
+if (!function_exists('saveUploadedImage')) {
+    function saveUploadedImage(array $file): string
+    {
+        $allowed = [
+            'image/jpeg' => 'jpg',
+            'image/png'  => 'png',
+            'image/gif'  => 'gif',
+            'image/webp' => 'webp',
+        ];
+
+        if ($file['size'] > 5 * 1024 * 1024) {
+            throw new Exception("Bilden är för stor (max 5 MB).");
+        }
+
+        $mime = detectMimeType($file['tmp_name']);
+        if (!isset($allowed[$mime])) {
+            throw new Exception("Ogiltig filtyp. Tillåtna: JPG, PNG, GIF, WEBP.");
+        }
+
+        $dir = dirname(__DIR__) . '/uploads/';
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new Exception("Kunde inte skapa uppladdningsmappen.");
+        }
+
+        $filename = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+        if (!move_uploaded_file($file['tmp_name'], $dir . $filename)) {
+            throw new Exception("Kunde inte spara bilden.");
+        }
+
+        return 'uploads/' . $filename;
+    }
+}
+
+// =====================================================================
+// Initiering
+// =====================================================================
+
+$method    = $_SERVER['REQUEST_METHOD'];
 $inputData = json_decode(file_get_contents("php://input"), true) ?? [];
-$action = $_GET['action'] ?? '';
+$action    = $_GET['action'] ?? '';
 
 $blogModule = new PageModule($conn, 'blog');
-$userId = $blogModule->resolveRequestUser();
+$userId     = $blogModule->resolveRequestUser();
 
 switch ($method) {
 
@@ -26,51 +141,46 @@ switch ($method) {
     // GET: Hämta bloggar, inlägg via titel, ID eller blog_id
     // =================================================================
     case 'GET':
-        // 1. Lista alla blogg-rymder
         if ($action === 'listBlogs') {
             $blogs = $conn->query("
-                SELECT b.ID AS blog_id, b.titel, b.description, b.created_at, u.username AS owner 
-                FROM blog b 
+                SELECT b.ID AS blog_id, b.titel, b.description, b.created_at, u.username AS owner
+                FROM blog b
                 JOIN `user` u ON b.FORuser = u.ID
             ")->fetch_all(MYSQLI_ASSOC);
-            echo json_encode(["status" => "success", "data" => $blogs]);
-            exit;
+
+            respondSuccess(["data" => $blogs]);
         }
 
-        // 1.5. Hämta specifik blogg via titel: ?action=getBlog&title=...
         if ($action === 'getBlog' && isset($_GET['title'])) {
             $searchTitle = "%" . trim($_GET['title']) . "%";
             $stmt = $conn->prepare("
-                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
-                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
-                FROM page_blog pb 
-                JOIN page p ON pb.FORpage = p.ID 
-                LEFT JOIN user u ON u.ID = p.FORuser
-                WHERE pb.ID = ? OR pb.FORpage = ?
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage,
+                       p.titel, p.content, p.created_at, p.FORuser, u.username AS author
+                FROM page_blog pb
+                JOIN page p ON pb.FORpage = p.ID
+                LEFT JOIN `user` u ON u.ID = p.FORuser
+                WHERE p.titel LIKE ?
+                LIMIT 1
             ");
             $stmt->bind_param("s", $searchTitle);
             $stmt->execute();
             $blog = $stmt->get_result()->fetch_assoc();
             $stmt->close();
 
-            if ($blog) {
-                echo json_encode(["status" => "success", "data" => $blog]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Bloggen hittades inte"]);
+            if (!$blog) {
+                respondError(404, "Bloggen hittades inte");
             }
-            exit;
+            respondSuccess(["data" => $blog]);
         }
 
-        // Hämta valfri limit från URL (standard = ingen begränsning)
         $commentLimit = isset($_GET['limit']) ? (int)$_GET['limit'] : null;
 
-        // 2. Hämta inlägg baserat på blog_id: ?blog_id=X
         if (isset($_GET['blog_id'])) {
             $blogId = (int)$_GET['blog_id'];
             $stmt = $conn->prepare("
                 SELECT p.ID AS page_id, p.titel, p.content, p.created_at, p.FORuser AS owner_id,
-                       u.username AS owner_username, pb.ID AS blog_id_rel, pb.FORblog AS blog_ref_id, v.state AS visibility
+                       u.username AS owner_username, pb.ID AS blog_id_rel, pb.FORblog AS blog_ref_id,
+                       v.state AS visibility
                 FROM page p
                 JOIN `user` u ON p.FORuser = u.ID
                 JOIN page_blog pb ON pb.FORpage = p.ID
@@ -83,22 +193,21 @@ switch ($method) {
             $stmt->close();
 
             foreach ($posts as &$post) {
-                $post['content'] = json_decode($post['content'], true);
+                $post['content']  = json_decode($post['content'], true);
                 $post['pictures'] = $blogModule->getPagePictures((int)$post['page_id']);
                 $post['comments'] = $blogModule->getComments((int)$post['page_id'], 'ASC', $commentLimit);
             }
             unset($post);
 
-            echo json_encode(["status" => "success", "data" => $posts]);
-            exit;
+            respondSuccess(["data" => $posts]);
         }
 
-        // 3. Hämta inlägg via URL-parameter: ?title=Rubrik&limit=5
         if (isset($_GET['title'])) {
             $searchTitle = "%" . trim($_GET['title']) . "%";
             $stmt = $conn->prepare("
                 SELECT p.ID AS page_id, p.titel, p.content, p.created_at, p.FORuser AS owner_id,
-                       u.username AS owner_username, pb.ID AS blog_id, pb.FORblog AS blog_ref_id, v.state AS visibility
+                       u.username AS owner_username, pb.ID AS blog_id, pb.FORblog AS blog_ref_id,
+                       v.state AS visibility
                 FROM page p
                 JOIN `user` u ON p.FORuser = u.ID
                 JOIN page_blog pb ON pb.FORpage = p.ID
@@ -111,96 +220,68 @@ switch ($method) {
             $post = $stmt->get_result()->fetch_assoc();
             $stmt->close();
 
-            if ($post) {
-                $post['content'] = json_decode($post['content'], true);
-                $post['pictures'] = $blogModule->getPagePictures((int)$post['page_id']);
-                $post['comments'] = $blogModule->getComments((int)$post['page_id'], 'ASC', $commentLimit);
-                echo json_encode(["status" => "success", "data" => $post]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Inlägget med den titeln hittades inte"]);
+            if (!$post) {
+                respondError(404, "Inlägget med den titeln hittades inte");
             }
-            exit;
+
+            $post['content']  = json_decode($post['content'], true);
+            $post['pictures'] = $blogModule->getPagePictures((int)$post['page_id']);
+            $post['comments'] = $blogModule->getComments((int)$post['page_id'], 'ASC', $commentLimit);
+            respondSuccess(["data" => $post]);
         }
 
-        // 4. Hämta inlägg via URL-parameter: ?id=X&limit=5
         if (isset($_GET['id'])) {
-            $id = (int)$_GET['id'];
+            $id   = (int)$_GET['id'];
             $post = $blogModule->getPage($id);
-            if ($post) {
-                $post['comments'] = $blogModule->getComments($id, 'ASC', $commentLimit);
-                echo json_encode(["status" => "success", "data" => $post]);
-            } else {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Inlägget hittades inte"]);
+
+            if (!$post) {
+                respondError(404, "Inlägget hittades inte");
             }
-        } else {
-            $result = $conn->query("
-                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
-                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
-                FROM page_blog pb 
-                JOIN page p ON pb.FORpage = p.ID
-                LEFT JOIN user u ON u.ID = p.FORuser
-            ");
-            $posts = [];
-            if ($result) {
-                while ($row = $result->fetch_assoc()) {
-                    $row['content'] = json_decode($row['content'], true);
-                    // Valfritt: Vill man ha med kommentarer i listvyn eller bara på enskilt inlägg? 
-                    // Här kan man lägga till $row['comments'] = $blogModule->getComments((int)$row['FORpage']); om man vill.
-                    $posts[] = $row;
-                }
-            }
-            echo json_encode(["status" => "success", "data" => $posts]);
+
+            $post['comments'] = $blogModule->getComments($id, 'ASC', $commentLimit);
+            respondSuccess(["data" => $post]);
         }
 
-        // 5. Standard: Lista alla inlägg
-        $posts = $blogModule->listPages($userId);
-        echo json_encode(["status" => "success", "data" => $posts]);
+        respondSuccess(["data" => $blogModule->listPages($userId)]);
         break;
 
     // =================================================================
-    // POST: Skapa Blogg, Skapa Inlägg eller Skapa Kommentar
+    // POST: Skapa blogg, inlägg eller kommentar
     // =================================================================
     case 'POST':
-        if (!$userId) {
-            http_response_code(401);
-            echo json_encode(["status" => "error", "message" => "Obehörig. X-User-Token saknas eller är ogiltig."]);
-            exit;
-        }
+        requireUser($userId);
 
+        // ----- Skapa blogg -----
         if ($action === 'createBlog') {
-            $title = trim($inputData['titel'] ?? '');
-            $description = trim($inputData['description'] ?? null);
-            $visibility = $inputData['visibility'] ?? 'public';
+            $title       = inputString($inputData, 'titel');
+            $description = inputString($inputData, 'description');
+            $visibility  = $inputData['visibility'] ?? 'public';
 
             if ($title === '') {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Bloggens titel krävs!"]);
-                exit;
+                respondError(400, "Bloggens titel krävs!");
             }
 
             try {
-                $normalized = $blogModule->normalizeVisibility($visibility);
-                $visId = ($normalized === 'private') ? 2 : 1;
+                $visId = visibilityToId($blogModule, $visibility);
 
-                $stmt = $conn->prepare("INSERT INTO blog (titel, description, FORuser, FORvisability) VALUES (?, ?, ?, ?)");
+                $stmt = $conn->prepare(
+                    "INSERT INTO blog (titel, description, FORuser, FORvisability) VALUES (?, ?, ?, ?)"
+                );
                 $stmt->bind_param("ssii", $title, $description, $userId, $visId);
                 $stmt->execute();
                 $blogId = (int)$conn->insert_id;
                 $stmt->close();
 
-                echo json_encode(["status" => "success", "message" => "Blogg skapad!", "blog_id" => $blogId]);
+                respondSuccess(["message" => "Blogg skapad!", "blog_id" => $blogId]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
 
+        // ----- Skapa inlägg (multipart/form-data) -----
         if ($action === 'createPost') {
+            // Hitta blogg via titel eller ID
             $blogId = 0;
-
             if (!empty($_POST['blog_title'])) {
                 $stmtBlog = $conn->prepare("SELECT ID FROM blog WHERE titel = ? LIMIT 1");
                 $stmtBlog->bind_param("s", $_POST['blog_title']);
@@ -214,75 +295,72 @@ switch ($method) {
                 $blogId = (int)$_POST['blog_id'];
             }
 
-            $title = trim($_POST['titel'] ?? '');
-            $content = $_POST['content'] ?? '';
+            $title    = inputString($_POST, 'titel');
+            $content  = $_POST['content'] ?? '';
             $visInput = $_POST['FORvisability'] ?? $_POST['visibility'] ?? 'public';
+
             if (is_numeric($visInput)) {
                 $visibility = ((int)$visInput === 2) ? 'private' : 'public';
             } else {
                 $visibility = $visInput;
             }
 
-            // 1. Hantera uppladdad bild via $_FILES
+            // Validera INNAN någon fil sparas (inga föräldralösa filer)
+            if ($blogId <= 0 || $title === '' || empty($content)) {
+                respondError(400, "Kunde inte hitta bloggen! Ange 'blog_title', samt titel och content.");
+            }
+
+            // Hantera bilduppladdning
             $savedImagePaths = [];
-            $uploadedFile = null;
+            $uploadedName    = null;
+            $uploadedMime    = null;
+
             if (!empty($_FILES['picture']) && $_FILES['picture']['error'] === UPLOAD_ERR_OK) {
                 try {
+                    $uploadedName = basename($_FILES['picture']['name']);
+                    $uploadedMime = detectMimeType($_FILES['picture']['tmp_name']); // Verklig MIME-typ
                     $savedImagePaths[] = saveUploadedImage($_FILES['picture']);
-                    $uploadedFile = $_FILES['picture'];
                 } catch (Exception $e) {
-                    http_response_code(400);
-                    echo json_encode(["status" => "error", "message" => $e->getMessage()]);
-                    exit;
+                    respondError(400, $e->getMessage());
                 }
             }
 
-            if ($blogId <= 0 || $title === '' || empty($content)) {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Kunde inte hitta bloggen! Ange 'blog_title', samt titel och content."]);
-                exit;
-            }
-
             try {
-                // 2. Skapa inlägget först
                 $pageId = $blogModule->createPage($title, $content, $userId, $visibility, null, $savedImagePaths);
 
-                // 3. Koppla till bloggen
                 $stmtSub = $conn->prepare("UPDATE page_blog SET FORblog = ? WHERE FORpage = ?");
                 $stmtSub->bind_param("ii", $blogId, $pageId);
                 $stmtSub->execute();
                 $stmtSub->close();
-                
-                // 4. Spara filnamnet i databasen med tvingad felhantering
-                if (!empty($savedImagePaths) && $uploadedFile) {
-                    $imgPath = $savedImagePaths[0];
-                    $origName = $uploadedFile['name'];
-                    $mimeType = $uploadedFile['type'];
 
-                    $stmtPic = $conn->prepare("INSERT INTO picture (filename, mime_type, image_data, FORpage) VALUES (?, ?, ?, ?)");
+                if (!empty($savedImagePaths)) {
+                    $imgPath = $savedImagePaths[0];
+
+                    $stmtPic = $conn->prepare(
+                        "INSERT INTO picture (filename, mime_type, image_data, FORpage) VALUES (?, ?, ?, ?)"
+                    );
                     if (!$stmtPic) {
-                        http_response_code(500);
-                        echo json_encode(["status" => "error", "message" => "SQL Prepare Error: " . $conn->error]);
-                        exit;
+                        respondError(500, "SQL Prepare Error: " . $conn->error);
                     }
 
-                    $stmtPic->bind_param("sssi", $origName, $mimeType, $imgPath, $pageId);
-                    
+                    $stmtPic->bind_param("sssi", $uploadedName, $uploadedMime, $imgPath, $pageId);
                     if (!$stmtPic->execute()) {
-                        http_response_code(500);
-                        echo json_encode(["status" => "error", "message" => "SQL Execute Error: " . $stmtPic->error]);
-                        exit;
+                        respondError(500, "SQL Execute Error: " . $stmtPic->error);
                     }
                     $stmtPic->close();
                 }
 
-                echo json_encode(["status" => "success", "message" => "Inlägg skapat med bild via Multipart!", "page_id" => $pageId, "blog_id" => $blogId]);
+                respondSuccess([
+                    "message"  => "Inlägg skapat!",
+                    "page_id"  => $pageId,
+                    "blog_id"  => $blogId,
+                ]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
+
+        // ----- Lägg till kommentar -----
         if ($action === 'addComment') {
             $pageId = (int)($inputData['page_id'] ?? 0);
 
@@ -297,208 +375,149 @@ switch ($method) {
                 }
             }
 
-            $commentText = trim($inputData['comment'] ?? '');
+            $commentText = inputString($inputData, 'comment');
 
             if ($pageId <= 0 || $commentText === '') {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "Kunde inte hitta inlägget! Ange 'titel' (eller 'page_id'), samt 'comment'."]);
-                exit;
+                respondError(400, "Kunde inte hitta inlägget! Ange 'titel' (eller 'page_id'), samt 'comment'.");
             }
 
             try {
                 $commentId = $blogModule->addComment($pageId, $userId, $commentText);
-                echo json_encode(["status" => "success", "message" => "Kommentar tillagd!", "comment_id" => $commentId, "page_id" => $pageId]);
+                respondSuccess([
+                    "message"    => "Kommentar tillagd!",
+                    "comment_id" => $commentId,
+                    "page_id"    => $pageId,
+                ]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
 
-        http_response_code(400);
-        echo json_encode(["status" => "error", "message" => "Okänd action för POST."]);
+        respondError(400, "Okänd action för POST.");
         break;
 
     // =================================================================
-    // PUT: Redigera inlägg, kommentar eller blogg
+    // PUT: Redigera blogg, kommentar eller inlägg
     // =================================================================
     case 'PUT':
-        if (!$userId) {
-            http_response_code(401);
-            echo json_encode(["status" => "error", "message" => "Obehörig. X-User-Token saknas eller är ogiltig."]);
-            exit;
-        }
+        requireUser($userId);
 
+        // ----- Uppdatera blogg -----
         if ($action === 'updateBlog') {
-            $blogId = (int)($inputData['blog_id'] ?? 0);
-            $title = trim($inputData['titel'] ?? '');
-            $description = trim($inputData['description'] ?? null);
-            $visibility = $inputData['visibility'] ?? 'public';
+            $blogId      = (int)($inputData['blog_id'] ?? 0);
+            $title       = inputString($inputData, 'titel');
+            $description = inputString($inputData, 'description');
+            $visibility  = $inputData['visibility'] ?? 'public';
 
             if ($blogId <= 0 || $title === '') {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "blog_id och titel krävs för att uppdatera bloggen!"]);
-                exit;
+                respondError(400, "blog_id och titel krävs för att uppdatera bloggen!");
             }
 
-            $stmtCheck = $conn->prepare("SELECT FORuser FROM blog WHERE ID = ? LIMIT 1");
-            $stmtCheck->bind_param("i", $blogId);
-            $stmtCheck->execute();
-            $blogOwner = $stmtCheck->get_result()->fetch_assoc();
-            $stmtCheck->close();
-
-            if (!$blogOwner) {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Bloggen hittades inte"]);
-                exit;
-            }
-
-            if ((int)$blogOwner['FORuser'] !== $userId) {
-                http_response_code(403);
-                echo json_encode(["status" => "error", "message" => "Endast ägaren kan uppdatera denna blogg"]);
-                exit;
-            }
+            assertBlogOwner($conn, $blogId, $userId, "Endast ägaren kan uppdatera denna blogg");
 
             try {
-                $normalized = $blogModule->normalizeVisibility($visibility);
-                $visId = ($normalized === 'private') ? 2 : 1;
+                $visId = visibilityToId($blogModule, $visibility);
 
-                $stmtUpd = $conn->prepare("UPDATE blog SET titel = ?, description = ?, FORvisability = ? WHERE ID = ?");
+                $stmtUpd = $conn->prepare(
+                    "UPDATE blog SET titel = ?, description = ?, FORvisability = ? WHERE ID = ?"
+                );
                 $stmtUpd->bind_param("ssii", $title, $description, $visId, $blogId);
                 $stmtUpd->execute();
                 $stmtUpd->close();
 
-                echo json_encode(["status" => "success", "message" => "Bloggen har uppdaterats!"]);
+                respondSuccess(["message" => "Bloggen har uppdaterats!"]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
 
+        // ----- Uppdatera kommentar -----
         if ($action === 'updateComment') {
-            $commentId = (int)($inputData['comment_id'] ?? 0);
+            $commentId  = (int)($inputData['comment_id'] ?? 0);
             $newContent = $inputData['comment'] ?? '';
 
             if ($commentId <= 0 || $newContent === '') {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "comment_id och ny kommentarstext krävs!"]);
-                exit;
+                respondError(400, "comment_id och ny kommentarstext krävs!");
             }
 
             if (!$blogModule->canModifyComment($commentId, $userId)) {
-                http_response_code(403);
-                echo json_encode(["status" => "error", "message" => "Endast den som skrev kommentaren (eller inläggets ägare/admin) får ändra den."]);
-                exit;
+                respondError(403, "Endast den som skrev kommentaren (eller inläggets ägare/admin) får ändra den.");
             }
 
             try {
                 $blogModule->updateComment($commentId, $newContent);
-                echo json_encode(["status" => "success", "message" => "Kommentaren har uppdaterats!"]);
+                respondSuccess(["message" => "Kommentaren har uppdaterats!"]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
 
+        // ----- Uppdatera inlägg (standard för PUT) -----
         $pageId = (int)($inputData['page_id'] ?? 0);
         if ($pageId <= 0) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "page_id krävs för att uppdatera inlägg!"]);
-            exit;
+            respondError(400, "page_id krävs för att uppdatera inlägg!");
         }
 
         if (!$blogModule->canModify($pageId, $userId, true)) {
-            http_response_code(403);
-            echo json_encode(["status" => "error", "message" => "Endast ägaren eller en administratör kan uppdatera detta inlägg"]);
-            exit;
+            respondError(403, "Endast ägaren eller en administratör kan uppdatera detta inlägg");
         }
 
         try {
-            $title = $inputData['titel'] ?? null;
-            $content = $inputData['content'] ?? null;
+            $title      = $inputData['titel'] ?? null;
+            $content    = $inputData['content'] ?? null;
             $removedPic = $inputData['removed_picture'] ?? null;
-            $addedPics = $inputData['pictures'] ?? [];
+            $addedPics  = $inputData['pictures'] ?? [];
 
             $blogModule->updatePage($pageId, $title, $content, $userId, $removedPic, $addedPics);
-            echo json_encode(["status" => "success", "message" => "Inlägget har uppdaterats!"]);
+            respondSuccess(["message" => "Inlägget har uppdaterats!"]);
         } catch (Exception $e) {
-            http_response_code(500);
-            echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+            respondError(500, $e->getMessage());
         }
         break;
 
     // =================================================================
-    // DELETE: Ta bort inlägg eller kommentar
+    // DELETE: Ta bort kommentar, blogg eller inlägg
     // =================================================================
     case 'DELETE':
-        if (!$userId) {
-            http_response_code(401);
-            echo json_encode(["status" => "error", "message" => "Obehörig."]);
-            exit;
-        }
+        requireUser($userId, "Obehörig.");
 
+        // ----- Ta bort kommentar -----
         if ($action === 'deleteComment') {
             $commentId = (int)($inputData['comment_id'] ?? 0);
 
             if ($commentId <= 0) {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "comment_id krävs för att ta bort kommentaren!"]);
-                exit;
+                respondError(400, "comment_id krävs för att ta bort kommentaren!");
             }
 
             if (!$blogModule->canModifyComment($commentId, $userId)) {
-                http_response_code(403);
-                echo json_encode(["status" => "error", "message" => "Endast den som skrev kommentaren (eller inläggets ägare/admin) får ta bort den."]);
-                exit;
+                respondError(403, "Endast den som skrev kommentaren (eller inläggets ägare/admin) får ta bort den.");
             }
 
             try {
                 $stmtDel = $conn->prepare("DELETE FROM comment WHERE ID = ?");
                 $stmtDel->bind_param("i", $commentId);
                 $stmtDel->execute();
-
-                if ($stmtDel->affected_rows > 0) {
-                    echo json_encode(["status" => "success", "message" => "Kommentaren har tagits bort!"]);
-                } else {
-                    http_response_code(404);
-                    echo json_encode(["status" => "error", "message" => "Hittade ingen kommentar med det ID:t."]);
-                }
+                $affected = $stmtDel->affected_rows;
                 $stmtDel->close();
+
+                if ($affected > 0) {
+                    respondSuccess(["message" => "Kommentaren har tagits bort!"]);
+                }
+                respondError(404, "Hittade ingen kommentar med det ID:t.");
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
 
+        // ----- Ta bort blogg -----
         if ($action === 'deleteBlog') {
             $blogId = (int)($inputData['blog_id'] ?? $_GET['blog_id'] ?? 0);
 
             if ($blogId <= 0) {
-                http_response_code(400);
-                echo json_encode(["status" => "error", "message" => "blog_id krävs för att ta bort bloggen!"]);
-                exit;
+                respondError(400, "blog_id krävs för att ta bort bloggen!");
             }
 
-            $stmtCheck = $conn->prepare("SELECT FORuser FROM blog WHERE ID = ? LIMIT 1");
-            $stmtCheck->bind_param("i", $blogId);
-            $stmtCheck->execute();
-            $blogOwner = $stmtCheck->get_result()->fetch_assoc();
-            $stmtCheck->close();
-
-            if (!$blogOwner) {
-                http_response_code(404);
-                echo json_encode(["status" => "error", "message" => "Bloggen hittades inte"]);
-                exit;
-            }
-
-            if ((int)$blogOwner['FORuser'] !== $userId) {
-                http_response_code(403);
-                echo json_encode(["status" => "error", "message" => "Endast ägaren kan ta bort denna blogg"]);
-                exit;
-            }
+            assertBlogOwner($conn, $blogId, $userId, "Endast ägaren kan ta bort denna blogg");
 
             try {
                 $stmtDel = $conn->prepare("DELETE FROM blog WHERE ID = ?");
@@ -506,38 +525,36 @@ switch ($method) {
                 $stmtDel->execute();
                 $stmtDel->close();
 
-                echo json_encode(["status" => "success", "message" => "Bloggen har tagits bort!"]);
+                respondSuccess(["message" => "Bloggen har tagits bort!"]);
             } catch (Exception $e) {
-                http_response_code(500);
-                echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+                respondError(500, $e->getMessage());
             }
-            exit;
         }
-        
+
+        // ----- Ta bort inlägg (standard för DELETE) -----
         $pageId = (int)($inputData['page_id'] ?? $_GET['page_id'] ?? 0);
         if ($pageId <= 0) {
-            http_response_code(400);
-            echo json_encode(["status" => "error", "message" => "page_id krävs!"]);
-            exit;
+            respondError(400, "page_id krävs!");
         }
 
         if (!$blogModule->canModify($pageId, $userId, true)) {
-            http_response_code(403);
-            echo json_encode(["status" => "error", "message" => "Ej behörig att radera inlägget."]);
-            exit;
+            respondError(403, "Ej behörig att radera inlägget.");
         }
 
-        $stmtDelSub = $conn->prepare("DELETE FROM page_blog WHERE FORpage = ?");
-        $stmtDelSub->bind_param("i", $pageId);
-        $stmtDelSub->execute();
-        $stmtDelSub->close();
+        try {
+            $stmtDelSub = $conn->prepare("DELETE FROM page_blog WHERE FORpage = ?");
+            $stmtDelSub->bind_param("i", $pageId);
+            $stmtDelSub->execute();
+            $stmtDelSub->close();
 
-        $blogModule->deletePage($pageId);
-        echo json_encode(["status" => "success", "message" => "Inlägg raderat permanent!"]);
+            $blogModule->deletePage($pageId);
+            respondSuccess(["message" => "Inlägg raderat permanent!"]);
+        } catch (Exception $e) {
+            respondError(500, $e->getMessage());
+        }
         break;
 
     default:
-        http_response_code(405);
-        echo json_encode(["status" => "error", "message" => "Metoden stöds inte"]);
+        respondError(405, "Metoden stöds inte");
         break;
 }

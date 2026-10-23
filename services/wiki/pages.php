@@ -59,13 +59,89 @@ if ((!$hasWikiAccess) or (!$userId)) {
     exit;
 }
 
-// 2. POST: Skapa en ny överordnad Wiki (?type=wiki) eller en Wiki-sida
+// 2. POST: Skapa en ny wiki/sida ELLER uppdatera en befintlig sida via Multipart Form
 if ($method === 'POST') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    if (!is_array($input)) {
-        $input = [];
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    $input = [];
+    $uploadedPictures = [];
+    $targetPageId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+    // Handle multipart/form-data (file uploads from Bruno)
+    if (stripos($contentType, 'multipart/form-data') !== false) {
+        $input = $_POST;
+
+        if (!empty($_FILES['pictures'])) {
+            $files = $_FILES['pictures'];
+            $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+            $fileCount = is_array($files['name']) ? count($files['name']) : 1;
+
+            for ($i = 0; $i < $fileCount; $i++) {
+                $error = is_array($files['error']) ? $files['error'][$i] : $files['error'];
+                if ($error === UPLOAD_ERR_OK) {
+                    $tmpName = is_array($files['tmp_name']) ? $files['tmp_name'][$i] : $files['tmp_name'];
+                    $originalName = basename(is_array($files['name']) ? $files['name'][$i] : $files['name']);
+                    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+
+                    if (in_array($ext, $allowedExtensions, true)) {
+                        $uploadedPictures[] = [
+                            'filename' => $originalName,
+                            'mime_type' => is_array($files['type']) ? $files['type'][$i] : 'image/png',
+                            'tmp_name' => $tmpName
+                        ];
+                    }
+                }
+            }
+        }
+    } else {
+        $input = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($input)) {
+            $input = [];
+        }
     }
 
+    // --- IF AN ID IS PROVIDED, UPDATE THE PAGE ---
+    if ($targetPageId > 0) {
+        if (!$wiki->getPage($targetPageId)) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Not found']);
+            exit;
+        }
+
+        if (!$wiki->canModify($targetPageId, (int)$userId, false)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden']);
+            exit;
+        }
+
+        $jsonPictures = is_array($input['pictures'] ?? null) ? $input['pictures'] : [];
+        $addedPictures = array_merge($jsonPictures, $uploadedPictures);
+        $removedPic = $input['removed_pic'] ?? null;
+        $title = $input['titel'] ?? null;
+        $content = $input['content'] ?? null;
+
+        try {
+            $wiki->updatePage(
+                $targetPageId,
+                $title,
+                $content,
+                (int)$userId,
+                $removedPic,
+                $addedPictures
+            );
+
+            echo json_encode([
+                'success' => true,
+                'message' => 'Page updated with files',
+                'page_id' => $targetPageId
+            ]);
+        } catch (Exception $e) {
+            http_response_code(500);
+            echo json_encode(['error' => 'Request could not be completed']);
+        }
+        exit;
+    }
+
+    // --- OTHERWISE, CREATE A NEW PAGE (Existing logic) ---
     $type = strtolower(trim((string)($_GET['type'] ?? ($input['type'] ?? 'page'))));
     $visibility = $wiki->normalizeVisibility($input['visibility'] ?? 'public');
 
@@ -106,7 +182,9 @@ if ($method === 'POST') {
     }
 
     $parentWikiId = isset($input['wiki_id']) ? (int)$input['wiki_id'] : (isset($_GET['wiki_id']) ? (int)$_GET['wiki_id'] : null);
-    $pictures = is_array($input['pictures'] ?? null) ? $input['pictures'] : [];
+    
+    $jsonPictures = is_array($input['pictures'] ?? null) ? $input['pictures'] : [];
+    $pictures = array_merge($jsonPictures, $uploadedPictures);
 
     try {
         $newPageId = $wiki->createPage(
@@ -131,7 +209,6 @@ if ($method === 'POST') {
     }
     exit;
 }
-
 // 3. PUT: Uppdatera sida (och lägg till / ta bort bilder i databasen)
 if ($method === 'PUT') {
     $pageId = isset($_GET['id']) ? (int)$_GET['id'] : 0;

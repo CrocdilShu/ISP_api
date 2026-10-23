@@ -124,7 +124,7 @@ function getUser(mysqli $conn): void {
         if ($step < 1) $step = 1;
 
         // Build base inner query
-        $innerSql = 'SELECT u.ID, u.username, u.email FROM user u WHERE u.ID >= ?';
+        $innerSql = 'SELECT u.ID, u.username, u.email, u.description, u.pfp_file FROM user u WHERE u.ID >= ?';
         $innerParams = [$startId];
 
         if ($userId > 0) {
@@ -139,8 +139,8 @@ function getUser(mysqli $conn): void {
         }
 
         // Wrap with window function for step/stride filtering and limit caps
-        $sql = 'SELECT ID, username, email FROM (
-                    SELECT ID, username, email, ROW_NUMBER() OVER (ORDER BY ID ASC) AS row_num
+        $sql = 'SELECT ID, username, email, description, pfp_file FROM (
+                    SELECT ID, username, email, description, pfp_file, ROW_NUMBER() OVER (ORDER BY ID ASC) AS row_num
                     FROM (' . $innerSql . ') base
                 ) t
                 WHERE (row_num - 1) % ? = 0

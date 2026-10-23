@@ -19,7 +19,7 @@ Den här guiden är till för utvecklare som vill skapa händelser, bjuda in kol
 
 ---
 
-## 📋 Översikt
+## Översikt
 
 Alla anrop går till en och samma URL. Du väljer vad som ska göras med `?action=` i URL:en.
 
@@ -45,7 +45,7 @@ Alla svar är JSON. Datum och tider använder alltid formatet `YYYY-MM-DD HH:MM:
 
 ---
 
-## 🔐 Autentisering
+## Autentisering
 
 Alla anrop i Kalender-API:et kräver autentisering.
 

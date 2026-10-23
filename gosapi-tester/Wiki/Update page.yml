@@ -1,15 +1,18 @@
 info:
-  name: " Skapa en wiki"
+  name: Update page
   type: http
-  seq: 4
+  seq: 5
 
 http:
   method: POST
-  url: http://localhost/api/wiki/pages.php?session_key=DIN_NYCKEL
+  url: "{{baseUrl}}pages.php?id=13"
   params:
-    - name: session_key
-      value: DIN_NYCKEL
+    - name: id
+      value: "13"
       type: query
+  body:
+    type: json
+    data: '{"titel":"New","content":"New text"}'
   auth: inherit
 
 settings:

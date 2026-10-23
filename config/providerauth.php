@@ -141,3 +141,13 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
 
     return true;
 }
+function getCompanySessionKey(mysqli $conn): ?string {
+    $companyId = COMPANY_ID;
+    $stmt = $conn->prepare(
+        "SELECT token FROM root_user WHERE ID = ? AND expire_date > NOW() LIMIT 1"
+    );
+    $stmt->bind_param("i", $companyId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    return $row['token'] ?? null;
+}

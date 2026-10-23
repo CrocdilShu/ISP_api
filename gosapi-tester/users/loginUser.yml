@@ -5,12 +5,26 @@ info:
 
 http:
   method: POST
-  url: https://gosapi.ddev.site:8443/services/user/user.php?action=loginUser
+  url: https://gosapi.ddev.site/services/user/user.php?action=loginUser
   params:
     - name: action
       value: loginUser
       type: query
-  auth: inherit
+  body:
+    type: json
+    data: |-
+      {
+        "email": "root@admin.com",
+        "password": "adminpassword"
+      }
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        let data = res.getBody();
+
+        bru.setEnvVar("X-User-Token", data.user_token);
 
 settings:
   encodeUrl: true

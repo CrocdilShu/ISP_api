@@ -1,0 +1,29 @@
+info:
+  name: Redigera Blogg
+  type: http
+  seq: 3
+
+http:
+  method: PUT
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=updateBlog
+  params:
+    - name: action
+      value: updateBlog
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "blog_id": 2,
+        "titel": "Min nya uppdaterade testblogg",
+        "description": "En uppdaterad beskrivning av bloggen",
+        "visibility": "public"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

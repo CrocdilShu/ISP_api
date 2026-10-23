@@ -1,18 +1,16 @@
 info:
-  name: Redigera
+  name: Ta bort
   type: http
-  seq: 4
+  seq: 1
 
 http:
-  method: PUT
+  method: DELETE
   url: https://gosapi.ddev.site/services/bloggapi.php
   body:
     type: json
     data: |-
       {
-        "titel": "Ett nytt grymt inlägg2",
-        "content": "uppdaterat innehåll",
-        "id": 1
+        "page_id": 22
       }
   auth: inherit
 

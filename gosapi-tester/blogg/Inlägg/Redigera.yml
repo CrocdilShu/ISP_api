@@ -1,17 +1,20 @@
 info:
-  name: kommentar
+  name: Redigera
   type: http
-  seq: 3
+  seq: 1
 
 http:
-  method: POST
+  method: PUT
   url: https://gosapi.ddev.site/services/bloggapi.php
   body:
     type: json
     data: |-
       {
-        "titel": "Ett nytt grymt inlägg3",
-        "comment": "hej sötis"
+        "page_id": 22,
+        "titel": "Ny uppdaterad rubrik på inlägget",
+        "content": {
+          "text": "Det här är det uppdaterade innehållet i inlägget!"
+        }
       }
   auth: inherit
 

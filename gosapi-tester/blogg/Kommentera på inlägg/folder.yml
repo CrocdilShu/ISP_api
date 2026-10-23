@@ -1,0 +1,7 @@
+info:
+  name: Kommentera på inlägg
+  type: folder
+  seq: 3
+
+request:
+  auth: inherit

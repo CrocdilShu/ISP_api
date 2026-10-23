@@ -358,3 +358,34 @@ function resolveUserId($conn, $identifier): int {
     }
     return 0;
 }
+
+function saveUploadedImage($file, $targetDir = __DIR__ . '/../blog_image/') {
+    if (!file_exists($targetDir)) {
+        mkdir($targetDir, 0777, true);
+    }
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        throw new Exception('Fel vid filuppladdning.');
+    }
+
+    $fileInfo = pathinfo($file['name']);
+    $ext = strtolower($fileInfo['extension']);
+
+    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
+        throw new Exception('Ogiltigt bildformat.');
+    }
+
+    // Skapa unikt filnamn baserat på bildens faktiska innehåll (hash)
+    $fileHash = md5_file($file['tmp_name']);
+    $fileName = $fileHash . '.' . $ext;
+    $filePath = $targetDir . $fileName;
+    $relativePath = 'blog_image/' . $fileName;
+
+    if (!file_exists($filePath)) {
+        if (!move_uploaded_file($file['tmp_name'], $filePath)) {
+            throw new Exception('Kunde inte spara den uppladdade filen.');
+        }
+    }
+
+    return $relativePath;
+}

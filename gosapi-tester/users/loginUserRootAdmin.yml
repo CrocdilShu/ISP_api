@@ -1,11 +1,11 @@
 info:
-  name: loginUser
+  name: loginUserRootAdmin
   type: http
-  seq: 6
+  seq: 5
 
 http:
   method: POST
-  url: https://gosapi.ddev.site/services/user/user.php?action=loginUser
+  url: "{{baseUrl}}user/user.php?action=loginUser"
   params:
     - name: action
       value: loginUser
@@ -14,7 +14,7 @@ http:
     type: json
     data: |-
       {
-        "email": "root@admin.com",
+        "email": "root@admin.com", 
         "password": "adminpassword"
       }
 

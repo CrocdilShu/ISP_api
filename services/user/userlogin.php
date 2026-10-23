@@ -25,7 +25,7 @@ function loginUser(mysqli $conn): void {
     $email    = trim((string)($body['email'] ?? ''));
     $password = (string)($body['password'] ?? '');
     if ($email === '' || $password === '') {
-        respond(400, ['error' => 'email and password are required']);
+        respond(400, ['error' => 'Email and password are required']);
     }
 
     $user = fetchOne(
@@ -39,17 +39,17 @@ function loginUser(mysqli $conn): void {
     $passwordOk = password_verify($password, $user['password_hash'] ?? DUMMY_PASSWORD_HASH);
     if (!$user || !$passwordOk) {
         // the same answer for "no such email" and "wrong password"
-        respond(401, ['error' => 'invalid email or password']);
+        respond(401, ['error' => 'Invalid email or password']);
     }
 
     try {
         $session = createUserSession($conn, (int)$user['ID']);
     } catch (mysqli_sql_exception $e) {
-        respond(500, ['error' => 'could not create the session']);
+        respond(500, ['error' => 'Could not create the user session']);
     }
 
     respond(200, [
-        'message'    => 'logged in',
+        'message'    => 'Logged in successfully',
         'user_token' => $session['token'],
         'expires_at' => $session['expires_at'],
         'user'       => [
@@ -70,9 +70,9 @@ function logoutUser(mysqli $conn): void {
 
     $token = getUserToken();
     if ($token === null) {
-        respond(401, ['error' => 'user token required (header X-User-Token)']);
+        respond(401, ['error' => 'User token required in header X-User-Token']);
     }
 
     run($conn, 'DELETE FROM user_session WHERE token_hash = ?', [hash('sha256', $token)]);
-    respond(200, ['message' => 'logged out']);
+    respond(200, ['message' => 'Logged out successfully']);
 }

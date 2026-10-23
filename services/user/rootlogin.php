@@ -79,15 +79,18 @@ function rootLogin(mysqli $conn): void {
 
     $sessionKey = $providerData['session_key'];
     $services   = (int)($providerData['services'] ?? 0);
-    $expiresAt  = date('Y-m-d H:i:s', strtotime('+30 minutes'));
-
+    
     try {
-        // Updates the root_users token, expiration date, and services bitmask
+        // Let MySQL handle the exact expiration timestamp using its own NOW() clock
         run(
             $conn,
-            'UPDATE root_user SET token = ?, expire_date = ? WHERE ID = ?',
-            [$sessionKey, $expiresAt, $userId]
+            'UPDATE root_user SET token = ?, expire_date = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE ID = ?',
+            [$sessionKey, $userId]
         );
+
+        // Fetch what MySQL actually set so you can return it accurately in the JSON response
+        $updatedUser = fetchOne($conn, 'SELECT expire_date FROM root_user WHERE ID = ?', [$userId]);
+        $expiresAt = $updatedUser['expire_date'];
 
         // Returns response 200
         respond(200, [

@@ -19,8 +19,148 @@ class PageModule {
     }
 
     /**
-     * Identifierar anropande användare ENDAST via X-User-Token (user_session -> user).
-     * Om användaren är 'banned' eller 'deleted_user' returneras null.
+     * ========================================================================
+     * BILDHANTERING & FÖLJARSTRUKTUR (services/wiki/pics)
+     * ========================================================================
+     */
+    private function getWikiPicsBaseDir(): string {
+        $dir = dirname(__DIR__) . '/wiki/pics';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        return $dir;
+    }
+
+    private function wikiPicWrite(string $subPath, array $item): string {
+        $baseDir = $this->getWikiPicsBaseDir();
+        $targetDir = $baseDir . '/' . ltrim($subPath, '/');
+        
+        if (!is_dir($targetDir)) {
+            mkdir($targetDir, 0755, true);
+        }
+
+        $filename = $item['filename'] ?? ('image_' . uniqid('', true) . '.png');
+        $filename = basename($filename);
+        $filePath = $targetDir . '/' . $filename;
+        $relativePath = ltrim($subPath, '/') . '/' . $filename;
+
+        if (isset($item['tmp_name']) && file_exists($item['tmp_name'])) {
+            move_uploaded_file($item['tmp_name'], $filePath);
+        } else {
+            $data = $item['data'] ?? ($item['image_data'] ?? '');
+            if (!empty($data)) {
+                if (preg_match('/^data:image\/(\w+);base64,/', $data)) {
+                    $data = substr($data, strpos($data, ',') + 1);
+                    $data = base64_decode($data);
+                }
+                file_put_contents($filePath, $data);
+            } else {
+                if (!file_exists($filePath)) {
+                    file_put_contents($filePath, '');
+                }
+            }
+        }
+
+        return $relativePath;
+    }
+
+    private function wikiPicDeleteFile(string $filePath): void {
+        $baseDir = $this->getWikiPicsBaseDir();
+        $fullPath = $baseDir . '/' . ltrim($filePath, '/');
+        if (file_exists($fullPath) && is_file($fullPath)) {
+            @unlink($fullPath);
+        }
+    }
+
+    private function wikiPicDeleteDir(string $subPath): void {
+        $baseDir = $this->getWikiPicsBaseDir();
+        $targetDir = $baseDir . '/' . ltrim($subPath, '/');
+        
+        if (is_dir($targetDir)) {
+            $files = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($targetDir, \RecursiveDirectoryIterator::SKIP_DOTFILES),
+                \RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($files as $file) {
+                if ($file->isDir()) {
+                    @rmdir($file->getRealPath());
+                } else {
+                    @unlink($file->getRealPath());
+                }
+            }
+            @rmdir($targetDir);
+        }
+    }
+
+    public function savePagePictures(int $pageId, int $userId, array $items): void {
+        $stmt = $this->conn->prepare("
+            INSERT INTO picture (filename, mime_type, image_data, FORpage, FORuser)
+            VALUES (?, ?, ?, ?, ?)
+        ");
+        foreach ($items as $item) {
+            if (is_string($item)) {
+                $filename = basename($item);
+                $path = 'pages/' . $pageId . '/' . $filename;
+                $fullDir = $this->getWikiPicsBaseDir() . '/pages/' . $pageId;
+                if (!is_dir($fullDir)) {
+                    mkdir($fullDir, 0755, true);
+                }
+                $fullPath = $fullDir . '/' . $filename;
+                if (!file_exists($fullPath)) {
+                    file_put_contents($fullPath, '');
+                }
+                $mime = 'image/png';
+                $data = '';
+            } else {
+                $path = $this->wikiPicWrite('pages/' . $pageId, $item);
+                $filename = $item['filename'] ?? basename($path);
+                $mime = $item['mime'] ?? ($item['mime_type'] ?? 'image/png');
+                $data = $item['data'] ?? ($item['image_data'] ?? '');
+            }
+            $stmt->bind_param("sssii", $filename, $mime, $data, $pageId, $userId);
+            $stmt->execute();
+        }
+    }
+
+    public function getPagePictures(int $pageId): array {
+        $stmt = $this->conn->prepare("
+            SELECT ID AS picture_id, filename, mime_type, image_data, created_at, FORuser AS uploaded_by
+            FROM picture
+            WHERE FORpage = ?
+            ORDER BY ID ASC
+        ");
+        $stmt->bind_param("i", $pageId);
+        $stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    }
+
+    public function deletePictureByIdOrName(int $pageId, string $identifier): ?string {
+        if (ctype_digit($identifier)) {
+            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE ID = ? AND FORpage = ?");
+            $picId = (int)$identifier;
+            $stmt->bind_param("ii", $picId, $pageId);
+        } else {
+            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE filename = ? AND FORpage = ?");
+            $stmt->bind_param("si", $identifier, $pageId);
+        }
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        foreach ($rows as $row) {
+            $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ?");
+            $rowId = (int)$row['ID'];
+            $del->bind_param("i", $rowId);
+            $del->execute();
+            
+            // Remove physical file
+            $this->wikiPicDeleteFile('pages/' . $pageId . '/' . $row['filename']);
+        }
+        return $rows ? $rows[0]['filename'] : $identifier;
+    }
+
+    /**
+     * ========================================================================
+     * USER RESOLUTION & AUTH
+     * ========================================================================
      */
     public function resolveRequestUser(): ?int {
         $token = function_exists('getUserToken') ? getUserToken() : null;
@@ -47,7 +187,9 @@ class PageModule {
             WHERE s.token_hash = ? AND s.expire_date > NOW()
             LIMIT 1
         ");
-        if (!$stmt) { return null; }
+        if (!$stmt) { 
+            return null; 
+        }
         $stmt->bind_param("s", $tokenHash);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
@@ -385,11 +527,9 @@ class PageModule {
                 $stmtDelUpp->bind_param("ii", $pageId, $newOwnerId);
                 $stmtDelUpp->execute();
 
-                if ($this->subTable === 'page_wiki') {
-                    $stmtDelEd = $this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-                    $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);
-                    $stmtDelEd->execute();
-                }
+                $stmtDelEd = $this->conn->prepare("DELETE FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
+                $stmtDelEd->bind_param("ii", $wikiId, $newOwnerId);
+                $stmtDelEd->execute();
 
                 $this->conn->commit();
                 return ['new_owner_id' => $newOwnerId, 'promoted_from' => 'co_owner'];
@@ -460,11 +600,6 @@ class PageModule {
         return count($pages);
     }
 
-    /**
-     * ========================================================================
-     * SIDOR (CRUD, Sökning & Sortering)
-     * ========================================================================
-     */
     public function getPage(int $pageId): ?array {
         $this->autoHealPageOwner($pageId);
 
@@ -605,7 +740,15 @@ class PageModule {
             $stmt->bind_param($types, ...$params);
         }
         $stmt->execute();
-        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $pages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        // Include pictures in list responses so listing pages shows them
+        foreach ($pages as &$page) {
+            $page['pictures'] = $this->getPagePictures((int)$page['page_id']);
+        }
+        unset($page);
+
+        return $pages;
     }
 
     public function createPage(
@@ -723,7 +866,12 @@ class PageModule {
     public function deletePage(int $pageId): bool {
         $stmtDel = $this->conn->prepare("DELETE FROM page WHERE ID = ?");
         $stmtDel->bind_param("i", $pageId);
-        return $stmtDel->execute();
+        $ok = $stmtDel->execute();
+        if ($ok) {
+            // Automatically remove the physical folder and pictures when the page is deleted
+            $this->wikiPicDeleteDir('pages/' . $pageId);
+        }
+        return $ok;
     }
 
     /**
@@ -814,4 +962,4 @@ public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = nul
         $stmt->bind_param("i", $commentId);
         return $stmt->execute();
     }
-}
+}   

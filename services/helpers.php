@@ -301,27 +301,30 @@ function resolveEventId(mysqli $conn, array $data): int {
         respond(400, ['error' => 'Either event_id or title is required to identify the event.']);
     }
 
+    // Use LIKE with '%' for prefix search
+    $titleParam = $title . '%';
+
     if ($creatorEmail !== '') {
         $event = fetchOne(
             $conn,
             'SELECT e.ID FROM calender_event e 
-             JOIN page p ON p.ID = e.ID 
-             JOIN user u ON u.ID = p.FORuser 
-             WHERE p.titel = ? AND u.email = ?',
-            [$title, $creatorEmail]
+                JOIN page p ON p.ID = e.ID 
+                JOIN user u ON u.ID = p.FORuser 
+                WHERE p.titel LIKE ? AND u.email = ?',
+            [$titleParam, $creatorEmail]
         );
     } else {
         $event = fetchOne(
             $conn,
             'SELECT e.ID FROM calender_event e 
-             JOIN page p ON p.ID = e.ID 
-             WHERE p.titel = ?',
-            [$title]
+                JOIN page p ON p.ID = e.ID 
+                WHERE p.titel LIKE ?',
+            [$titleParam]
         );
     }
 
     if (!$event) {
-        respond(404, ['error' => 'Event not found matching the specified title and creator.']);
+        respond(404, ['error' => 'Event not found matching the specified title prefix and creator.']);
     }
 
     return (int)$event['ID'];
@@ -359,33 +362,67 @@ function resolveUserId($conn, $identifier): int {
     return 0;
 }
 
-function saveUploadedImage($file, $targetDir = __DIR__ . '/../blog_image/') {
-    if (!file_exists($targetDir)) {
-        mkdir($targetDir, 0777, true);
+//---------------------------------------------------------------------------------------------------
+// Uploads a profile picture to the 'img/' directory.
+// 
+// @param array $file The $_FILES['pfp_file'] array item.
+// @param string|null $old_pfp_path Optional existing path to delete upon replacement.
+// @return string Returns the relative path to the uploaded file (e.g., "img/pfp_65a123f.png").
+// @throws Exception If upload fails, file type is invalid, or size exceeds limit.
+//------------------------------------------------------------------------------------------------
+function uploadProfilePicture(array $file, ?string $old_pfp_path = null): string {
+    // 1. Check for PHP upload errors
+    if (!isset($file['error']) || is_array($file['error'])) {
+        throw new Exception("Invalid file parameter.");
     }
 
     if ($file['error'] !== UPLOAD_ERR_OK) {
-        throw new Exception('Fel vid filuppladdning.');
+        throw new Exception("File upload failed with error code " . $file['error']);
     }
 
-    $fileInfo = pathinfo($file['name']);
-    $ext = strtolower($fileInfo['extension']);
-
-    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
-        throw new Exception('Ogiltigt bildformat.');
+    // 2. Validate file size (e.g., max 5MB)
+    if ($file['size'] > 5 * 1024 * 1024) {
+        throw new Exception("File size exceeds 5MB limit.");
     }
 
-    // Skapa unikt filnamn baserat på bildens faktiska innehåll (hash)
-    $fileHash = md5_file($file['tmp_name']);
-    $fileName = $fileHash . '.' . $ext;
-    $filePath = $targetDir . $fileName;
-    $relativePath = 'blog_image/' . $fileName;
+    // 3. Validate image MIME type (do not rely purely on file extension)
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime_type = $finfo->file($file['tmp_name']);
+    
+    $allowed_types = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp'
+    ];
 
-    if (!file_exists($filePath)) {
-        if (!move_uploaded_file($file['tmp_name'], $filePath)) {
-            throw new Exception('Kunde inte spara den uppladdade filen.');
+    if (!array_key_exists($mime_type, $allowed_types)) {
+        throw new Exception("Invalid file format. Only JPG, PNG, and WEBP are allowed.");
+    }
+
+    // 4. Ensure the target 'img/' folder exists
+    $upload_dir = __DIR__ . '/../img/'; // Adjust path to point to your root 'img/' directory
+    if (!is_dir($upload_dir)) {
+        mkdir($upload_dir, 0755, true);
+    }
+
+    // 5. Generate a unique filename to prevent overwrites
+    $extension = $allowed_types[$mime_type];
+    $filename = sprintf('pfp_%s.%s', bin2hex(random_bytes(8)), $extension);
+    $target_filepath = $upload_dir . $filename;
+
+    // 6. Move uploaded file from temp directory to target
+    if (!move_uploaded_file($file['tmp_name'], $target_filepath)) {
+        throw new Exception("Failed to move uploaded file.");
+    }
+
+    // 7. Delete the old picture file if updating and an old file exists
+    if ($old_pfp_path) {
+        $old_full_path = __DIR__ . '/../' . ltrim($old_pfp_path, '/');
+        if (file_exists($old_full_path) && is_file($old_full_path)) {
+            @unlink($old_full_path);
         }
     }
 
-    return $relativePath;
+    // Return the relative path to store in the database
+    return 'img/' . $filename;
 }

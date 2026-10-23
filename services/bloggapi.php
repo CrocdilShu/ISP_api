@@ -41,11 +41,12 @@ switch ($method) {
         if ($action === 'getBlog' && isset($_GET['title'])) {
             $searchTitle = "%" . trim($_GET['title']) . "%";
             $stmt = $conn->prepare("
-                SELECT b.ID AS blog_id, b.titel, b.description, b.created_at, u.username AS owner 
-                FROM blog b 
-                JOIN `user` u ON b.FORuser = u.ID 
-                WHERE b.titel LIKE ? 
-                LIMIT 1
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
+                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
+                FROM page_blog pb 
+                JOIN page p ON pb.FORpage = p.ID 
+                LEFT JOIN user u ON u.ID = p.FORuser
+                WHERE pb.ID = ? OR pb.FORpage = ?
             ");
             $stmt->bind_param("s", $searchTitle);
             $stmt->execute();
@@ -133,7 +134,24 @@ switch ($method) {
                 http_response_code(404);
                 echo json_encode(["status" => "error", "message" => "Inlägget hittades inte"]);
             }
-            exit;
+        } else {
+            $result = $conn->query("
+                SELECT pb.ID AS blog_id, pb.last_update, pb.FORvisability, pb.FORpage, 
+                    p.titel, p.content, p.created_at, p.FORuser, u.username AS author
+                FROM page_blog pb 
+                JOIN page p ON pb.FORpage = p.ID
+                LEFT JOIN user u ON u.ID = p.FORuser
+            ");
+            $posts = [];
+            if ($result) {
+                while ($row = $result->fetch_assoc()) {
+                    $row['content'] = json_decode($row['content'], true);
+                    // Valfritt: Vill man ha med kommentarer i listvyn eller bara på enskilt inlägg? 
+                    // Här kan man lägga till $row['comments'] = $blogModule->getComments((int)$row['FORpage']); om man vill.
+                    $posts[] = $row;
+                }
+            }
+            echo json_encode(["status" => "success", "data" => $posts]);
         }
 
         // 5. Standard: Lista alla inlägg
@@ -523,4 +541,3 @@ switch ($method) {
         echo json_encode(["status" => "error", "message" => "Metoden stöds inte"]);
         break;
 }
-?>

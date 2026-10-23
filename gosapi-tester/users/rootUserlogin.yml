@@ -5,7 +5,18 @@ info:
 
 http:
   method: POST
-  url: ""
+  url: "{{baseUrl}}user/user.php?action=rootLogin"
+  params:
+    - name: action
+      value: rootLogin
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "username": "gos_1", 
+        "password": "**test**"
+      }
   auth: inherit
 
 settings:

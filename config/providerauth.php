@@ -55,7 +55,7 @@ function verifySessionWithProvider(?string $sessionKey): ?array {
     if ($ch === null) {
         $ch = curl_init(PROVIDER_VERIFY_URL);
         curl_setopt_array($ch, [
-            CURLOPT_POST          => true,
+            CURLOPT_POST            => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
@@ -84,14 +84,15 @@ function verifySessionWithProvider(?string $sessionKey): ?array {
 
 // Updates the session expiration in the root_user table by 30 minutes from now.
 function touchProviderSession(mysqli $conn, string $sessionKey): void {
-    // Clean up expired sessions first based on your 'expire_date' column
-    run($conn, 'DELETE FROM root_user WHERE expire_date < NOW()');
-
-    // Check if this token already exists in the table
-    $existing = fetchOne($conn, 'SELECT ID FROM root_user WHERE token = ?', [$sessionKey]);
+    // Check if this token exists and hasn't already expired locally
+    $existing = fetchOne(
+        $conn, 
+        'SELECT ID FROM root_user WHERE token = ? AND expire_date >= NOW()', 
+        [$sessionKey]
+    );
 
     if ($existing) {
-        // Extend the expiration by 30 minutes from right now
+        // Extend the expiration by 30 minutes from right now (rolling window)
         run(
             $conn,
             'UPDATE root_user 
@@ -107,7 +108,19 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
         return false;
     }
 
-    // 1. Verify with the external provider first
+    // 1. Check if the token exists locally and is still within its 30-minute window
+    if (isset($GLOBALS['conn']) && $GLOBALS['conn'] instanceof mysqli) {
+        $localCheck = fetchOne(
+            $GLOBALS['conn'],
+            'SELECT 1 FROM root_user WHERE token = ? AND expire_date >= NOW()',
+            [$sessionKey]
+        );
+        if (!$localCheck) {
+            return false; // Local session expired or doesn't exist
+        }
+    }
+
+    // 2. Verify with the external provider
     $data = verifySessionWithProvider($sessionKey);
     if (!$data) {
         return false;
@@ -121,7 +134,7 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
         return false;
     }
 
-    // If a database connection is available, extend the session expiration in root_user by 30 min
+    // 3. Extend the session expiration in root_user by 30 min (rolling window)
     if (isset($GLOBALS['conn']) && $GLOBALS['conn'] instanceof mysqli) {
         touchProviderSession($GLOBALS['conn'], $sessionKey);
     }

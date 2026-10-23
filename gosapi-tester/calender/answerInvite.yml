@@ -1,0 +1,34 @@
+info:
+  name: answerInvite
+  type: http
+  seq: 14
+
+http:
+  method: POST
+  url: https://gosapi.ddev.site/services/user/user.php?action=loginUser
+  params:
+    - name: action
+      value: respondToInvite
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "email": "root@admin.com",
+        "password": "adminpassword"
+      }
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        let data = res.getBody();
+
+        bru.setEnvVar("X-User-Token", data.user_token);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

@@ -67,7 +67,7 @@ function emailTaken(mysqli $conn, string $email, int $exceptUserId = 0): bool {
 // 8-72 characters (72 bytes is the limit of the bcrypt hash PHP uses)
 function cleanPasswordInput($raw): string {
     if (!is_string($raw) || strlen($raw) < 8 || strlen($raw) > 72) {
-        respond(400, ['error' => 'password must be 8-72 characters']);
+        respond(400, ['error' => 'Password must be between 8 and 72 characters']);
     }
     return $raw;
 }
@@ -76,7 +76,7 @@ function cleanPasswordInput($raw): string {
 function cleanText255($raw, string $field): ?string {
     if ($raw === null) return null;
     if (!is_string($raw) || mb_strlen(trim($raw)) > 255) {
-        respond(400, ['error' => "$field must be text of at most 255 characters, or null"]);
+        respond(400, ['error' => "Field '$field' must be at most 255 characters, or null"]);
     }
     $text = trim($raw);
     return $text === '' ? null : $text;
@@ -86,10 +86,16 @@ function cleanText255($raw, string $field): ?string {
 // GET getUser
 // optional: ?user_id=x  (or ?email=user@test.com) (get one specific user)
 // optional: ?page_type=   blog | wiki | calendar  (the pages/events the users own)
+// optional: ?title=M     (filters pages/events starting with M)
+// optional: ?username=M  (filters users starting with M)
+// optional: ?start_id=40 (minimum user ID to start from)
+// optional: ?limit=100   (maximum number of users to return)
+// optional: ?step=3      (stride/step pattern: take 1, skip 2 = 3)
 // ---------------------------------------------------------------
 function getUser(mysqli $conn): void {
     requireMethod('GET');
 
+unset($u);
     // optional login: decides what the caller may see
     $acting = actingUserRow($conn, false);
     $actingId = $acting ? (int)$acting['ID'] : 0;
@@ -105,20 +111,43 @@ function getUser(mysqli $conn): void {
         if ($userRow) {
             $userId = (int)$userRow['ID'];
         } else {
-            respond(404, ['error' => 'User not found by email.']);
+            respond(404, ['error' => 'User not found by email']);
         }
     }
 
-    $params = [];
-
-    // Only getUser and nothing more: the users with ID and username (and email when allowed)
+    // Only getUser and nothing more: users with ID, username, and email (with pagination & step support)
     if ($pageType === '') {
-        $sql = 'SELECT u.ID, u.username, u.email FROM user u WHERE 1 = 1';
+        $startId = (int)($_GET['start_id'] ?? 0);
+        $limit = (int)($_GET['limit'] ?? 100);
+        $step = (int)($_GET['step'] ?? 1);
+
+        if ($limit <= 0) $limit = 100;
+        if ($step < 1) $step = 1;
+
+        // Build base inner query
+        $innerSql = 'SELECT u.ID, u.username, u.email, u.description, u.pfp_file FROM user u WHERE u.ID >= ?';
+        $innerParams = [$startId];
+
         if ($userId > 0) {
-            $sql .= ' AND u.ID = ?';
-            $params[] = $userId;
+            $innerSql .= ' AND u.ID = ?';
+            $innerParams[] = $userId;
         }
-        $sql .= ' ORDER BY u.ID ASC';
+
+        $usernamePrefix = trim((string)($_GET['username'] ?? $_GET['name'] ?? ''));
+        if ($usernamePrefix !== '') {
+            $innerSql .= ' AND u.username LIKE ?';
+            $innerParams[] = $usernamePrefix . '%';
+        }
+
+        // Wrap with window function for step/stride filtering and limit caps
+        $sql = 'SELECT ID, username, email, description, pfp_file FROM (
+                    SELECT ID, username, email, description, pfp_file, ROW_NUMBER() OVER (ORDER BY ID ASC) AS row_num
+                    FROM (' . $innerSql . ') base
+                ) t
+                WHERE (row_num - 1) % ? = 0
+                LIMIT ?';
+
+        $params = array_merge($innerParams, [$step, $limit]);
 
         $users = fetchAll($conn, $sql, $params);
         foreach ($users as &$user) {
@@ -128,8 +157,16 @@ function getUser(mysqli $conn): void {
         }
         unset($user);
 
-        respond(200, ['users' => $users]);
+        respond(200, [
+            'start_id' => $startId,
+            'limit' => $limit,
+            'step' => $step,
+            'count' => count($users),
+            'users' => $users
+        ]);
     }
+
+    $params = [];
 
     // Depending on what page_type was asked for
     switch ($pageType) {
@@ -165,7 +202,7 @@ function getUser(mysqli $conn): void {
             break;
 
         default:
-            respond(400, ['error' => 'Invalid page_type. Choose from: blog, wiki, calendar.']);
+            respond(400, ['error' => 'Invalid page_type. Choose from: blog, wiki, calendar']);
     }
 
     // Blog and wiki pages can be private: only the owner and admins may see those
@@ -178,6 +215,13 @@ function getUser(mysqli $conn): void {
     if ($userId > 0) {
         $sql .= ' AND u.ID = ?';
         $params[] = $userId;
+    }
+
+    // Optional title prefix filter (e.g. ?title=M or ?titel=M -> matches titles starting with M)
+    $titlePrefix = trim((string)($_GET['title'] ?? $_GET['titel'] ?? ''));
+    if ($titlePrefix !== '') {
+        $sql .= ' AND pg.titel LIKE ?';
+        $params[] = $titlePrefix . '%';
     }
 
     $sql .= ' ORDER BY u.ID ASC';
@@ -196,19 +240,23 @@ function getUser(mysqli $conn): void {
 // ---------------------------------------------------------------
 // POST createNewUser
 // body: {
-//      "email": "user@example.com",     (required, max 255 chars)
-//      "username": "username",          (required, max 255 chars)
-//      "password": "plain_password",    (required, 8-72 chars)
-//      "description": "...",            (optional)
-//      "pfp_file": "...",               (optional, default: DEFAULT_PFP)
-//      "FORrole": x                     (optional, defaults to 1 = user)
+//      "email": "user@example.com",       (required, max 255 chars)
+//      "username": "username",            (required, max 255 chars)
+//      "password": "plain_password",      (required, 8-72 chars)
+//      "description": "...",              (optional, max 255 chars or null)
+//      "pfp_file": "...",                 (optional, max 255 chars, defaults to DEFAULT_PFP)
+//      "FORrole": x                       (optional, role ID, defaults to 1 = user)
 // }
-// Only admins can create users, and only with a role up to their own.
-// The very first user ever created needs no login and becomes root_admin.
+//
+// Behavior & Rules:
+// - The very first user created in an empty database requires no login and automatically becomes a 'root_admin'.
+// - Subsequent users require an authenticated admin (role level >= 2) to make the request.
+// - Admins can only assign roles up to their own power level.
+// - Email addresses must be unique across the system.
 // ---------------------------------------------------------------
 function createNewUser(mysqli $conn): void {
     requireMethod('POST');
-    $body = getBody();
+    $body = $_POST;
 
     // Validate email
     $email = trim((string)($body['email'] ?? ''));
@@ -219,12 +267,24 @@ function createNewUser(mysqli $conn): void {
     // Validate username
     $username = trim((string)($body['username'] ?? ''));
     if ($username === '' || mb_strlen($username) > 255) {
-        respond(400, ['error' => 'username is required (max 255 characters)']);
+        respond(400, ['error' => 'Username is required (max 255 characters)']);
     }
 
     $password    = cleanPasswordInput($body['password'] ?? null);
     $description = array_key_exists('description', $body) ? cleanText255($body['description'], 'description') : null;
-    $pfpFile     = array_key_exists('pfp_file', $body) ? cleanText255($body['pfp_file'], 'pfp_file') : DEFAULT_PFP;
+    
+    // Handle profile picture
+    $pfpFile = DEFAULT_PFP;
+    if (isset($_FILES['pfp_file']) && $_FILES['pfp_file']['error'] !== UPLOAD_ERR_NO_FILE) {
+        try {
+            $pfpFile = uploadProfilePicture($_FILES['pfp_file']);
+        } catch (Exception $e) {
+            respond(400, ['error' => $e->getMessage()]);
+        }
+    } elseif (array_key_exists('pfp_file', $body) && !empty($body['pfp_file'])) {
+        // Allows passing a direct string path/url if not uploading a raw file
+        $pfpFile = cleanText255($body['pfp_file'], 'pfp_file');
+    }
 
     // If no role was given it defaults to role.ID 1, which is user
     $forRole = isset($body['FORrole']) ? (int)$body['FORrole'] : 1;
@@ -235,21 +295,21 @@ function createNewUser(mysqli $conn): void {
         // Nobody exists yet who could act as admin: the first user becomes root_admin
         $role = fetchOne($conn, "SELECT ID, role_name FROM role WHERE role_name = 'root_admin'");
         if (!$role) {
-            respond(500, ['error' => 'the role root_admin is missing in the role table']);
+            respond(500, ['error' => 'The role root_admin is missing in the database role table']);
         }
     } else {
         $acting = actingUserRow($conn, true);
         if (roleLevel($acting['role_name']) < 2) {
-            respond(403, ['error' => 'only admins can create users']);
+            respond(403, ['error' => 'Only admins can create users']);
         }
 
         $role = findRole($conn, $forRole);
         if (!$role) {
-            respond(400, ['error' => 'unknown role']);
+            respond(400, ['error' => 'Unknown role ID']);
         }
         // you can only hand out roles up to your own
         if (roleLevel($role['role_name']) > roleLevel($acting['role_name'])) {
-            respond(403, ['error' => 'you cannot give a role higher than your own']);
+            respond(403, ['error' => 'You cannot assign a role higher than your own']);
         }
     }
 
@@ -263,9 +323,8 @@ function createNewUser(mysqli $conn): void {
             'INSERT INTO user (email, password_hash, username, description, pfp_file, FORrole) VALUES (?, ?, ?, ?, ?, ?)',
             [$email, password_hash($password, PASSWORD_DEFAULT), $username, $description, $pfpFile, (int)$role['ID']]
         );
-        respond(201, ['message' => 'user created', 'user_id' => $conn->insert_id]);
+        respond(201, ['message' => 'User created successfully', 'user_id' => $conn->insert_id]);
     } catch (mysqli_sql_exception $e) {
-        // duplicate email (two requests at the same moment)
         if ((int)$e->getCode() === 1062) {
             respond(409, ['error' => 'Email address is already registered']);
         }
@@ -276,27 +335,35 @@ function createNewUser(mysqli $conn): void {
 // ---------------------------------------------------------------
 // PUT editUser (POST also accepted)
 // body: {
-//       "user_id": 5,
-//       "email": "new@example.com",          (optional)
-//       "username": "new_username",          (optional)
-//       "password": "new_plain_password",    (optional, 8-72 chars)
-//       "description": "...",                (optional)
-//       "pfp_file": "...",                   (optional)
-//       "FORrole": 2                         (optional)
+//      "user_id": 5,                      (optional if target_email is provided)
+//      "target_email": "old@example.com", (optional: used to look up user if user_id is omitted)
+//      "email": "new@example.com",        (optional: the new email to update to)
+//      "username": "new_username",        (optional)
+//      "password": "new_plain_password",  (optional, 8-72 chars)
+//      "description": "",              (optional)
+//      "pfp_file": "",                 (optional)
+//      "FORrole": 2                       (optional)
 // }
-// only send the fields you want to change
-// "description": null -> clears the description
-// "pfp_file": null    -> clears the profile picture
-// You can edit yourself, or users with a lower role than yours (root_admin: anyone).
-// Changing a role: admins only, never your own, never higher than your own.
 // ---------------------------------------------------------------
 function editUser(mysqli $conn): void {
     requireMethod('PUT', 'POST');
-    $body = getBody();
+    $body = $_POST;
 
     $userId = (int)($body['user_id'] ?? 0);
+    $targetEmail = trim((string)($body['target_email'] ?? ''));
+
+    // Allow identifying the target user via target_email if user_id is not provided
+    if ($userId <= 0 && $targetEmail !== '') {
+        $targetUserRow = fetchOne($conn, 'SELECT ID FROM user WHERE email = ?', [$targetEmail]);
+        if ($targetUserRow) {
+            $userId = (int)$targetUserRow['ID'];
+        } else {
+            respond(404, ['error' => 'User not found by target email']);
+        }
+    }
+
     if ($userId <= 0) {
-        respond(400, ['error' => 'user_id is required']);
+        respond(400, ['error' => 'user_id or target_email is required']);
     }
 
     $acting = actingUserRow($conn, true);
@@ -304,12 +371,12 @@ function editUser(mysqli $conn): void {
     // Ensure user exists before trying to update
     $target = loadUserWithRole($conn, $userId);
     if (!$target) {
-        respond(404, ['error' => 'user not found']);
+        respond(404, ['error' => 'User not found']);
     }
 
     $isSelf = (int)$acting['ID'] === $userId;
     if (!$isSelf && !canManageUser($acting, $target)) {
-        respond(403, ['error' => 'you are not allowed to change this user']);
+        respond(403, ['error' => 'You are not allowed to modify this user']);
     }
 
     $fields = [];
@@ -319,10 +386,10 @@ function editUser(mysqli $conn): void {
     if (array_key_exists('email', $body)) {
         $email = trim((string)$body['email']);
         if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || mb_strlen($email) > 255) {
-            respond(400, ['error' => 'a valid email is required (max 255 characters)']);
+            respond(400, ['error' => 'A valid email is required (max 255 characters)']);
         }
         if (emailTaken($conn, $email, $userId)) {
-            respond(409, ['error' => 'email address is already registered']);
+            respond(409, ['error' => 'Email address is already registered']);
         }
         $fields[] = 'email = ?';
         $params[] = $email;
@@ -332,7 +399,7 @@ function editUser(mysqli $conn): void {
     if (array_key_exists('username', $body)) {
         $username = trim((string)$body['username']);
         if ($username === '' || mb_strlen($username) > 255) {
-            respond(400, ['error' => 'username must be 1-255 characters']);
+            respond(400, ['error' => 'Username must be 1-255 characters']);
         }
         $fields[] = 'username = ?';
         $params[] = $username;
@@ -350,8 +417,18 @@ function editUser(mysqli $conn): void {
         $params[] = cleanText255($body['description'], 'description');
     }
 
-    // Update profile picture file path (allows null to clear)
-    if (array_key_exists('pfp_file', $body)) {
+    // Handle Profile Picture Upload / Update
+    if (isset($_FILES['pfp_file']) && $_FILES['pfp_file']['error'] !== UPLOAD_ERR_NO_FILE) {
+        try {
+            // Passes existing pfp path so helper can delete the old file automatically
+            $pfpFilePath = uploadProfilePicture($_FILES['pfp_file'], $target['pfp_file'] ?? null);
+            $fields[] = 'pfp_file = ?';
+            $params[] = $pfpFilePath;
+        } catch (Exception $e) {
+            respond(400, ['error' => $e->getMessage()]);
+        }
+    } elseif (array_key_exists('pfp_file', $body)) {
+        // Allows clearing or updating via direct text string if no file upload stream was sent
         $fields[] = 'pfp_file = ?';
         $params[] = cleanText255($body['pfp_file'], 'pfp_file');
     }
@@ -359,51 +436,51 @@ function editUser(mysqli $conn): void {
     // Update user role ID
     if (array_key_exists('FORrole', $body) && (int)$body['FORrole'] !== (int)$target['FORrole']) {
         if ($isSelf) {
-            respond(403, ['error' => 'you cannot change your own role']);
+            respond(403, ['error' => 'You cannot change your own role']);
         }
         if (roleLevel($acting['role_name']) < 2) {
-            respond(403, ['error' => 'only admins can change roles']);
+            respond(403, ['error' => 'Only admins can change roles']);
         }
         $role = findRole($conn, (int)$body['FORrole']);
         if (!$role) {
-            respond(400, ['error' => 'invalid role ID']);
+            respond(400, ['error' => 'Invalid role ID']);
         }
         if (roleLevel($role['role_name']) > roleLevel($acting['role_name'])) {
-            respond(403, ['error' => 'you cannot give a role higher than your own']);
+            respond(403, ['error' => 'You cannot assign a role higher than your own']);
         }
         $fields[] = 'FORrole = ?';
         $params[] = (int)$role['ID'];
     }
 
     if (!$fields) {
-        respond(400, ['error' => 'nothing to update']);
+        respond(400, ['error' => 'No fields provided to update']);
     }
 
     try {
         $params[] = $userId;
         run($conn, 'UPDATE user SET ' . implode(', ', $fields) . ' WHERE ID = ?', $params);
 
-        respond(200, ['message' => 'user updated']);
+        respond(200, ['message' => 'User updated successfully']);
     } catch (mysqli_sql_exception $e) {
-        // Handle unique constraint violation like email
         if ((int)$e->getCode() === 1062) {
-            respond(409, ['error' => 'email address is already registered']);
+            respond(409, ['error' => 'Email address is already registered']);
         }
-        respond(500, ['error' => 'could not update user']);
+        respond(500, ['error' => 'Could not update user']);
     }
 }
 
 // ---------------------------------------------------------------
 // DELETE deleteUser (POST also accepted)
 // body: {
-//       "email": "user@example.com",       (the email can also be in the URL: ?email=...)
-//       "remove": ["calendar", "wiki"]     (optional: specify what to remove)
+//      "email": "user@example.com",      (required, can also be passed in URL as ?email=...)
+//      "remove": ["calendar", "wiki"]    (optional: array of specific data types to remove)
 // }
-//
-// - If "remove" is omitted, deletes the entire user and all data.
-// - Available removal types: "calendar", "wiki", "blog", "account" (or "user")
-// You can delete yourself, or users with a lower role than yours (root_admin: anyone).
-// The last root_admin can never be deleted.
+// 
+// Behavior:
+// - If "remove" is omitted, deletes the entire user account and all associated data.
+// - Supported removal types: "calendar" (or "calendar_event"), "wiki", "blog", "account" (or "user").
+// - Permissions: You can delete yourself, or users with a lower role than yours (root_admin can delete anyone).
+// - Constraint: The last remaining root_admin user can never be deleted.
 // ---------------------------------------------------------------
 function deleteUser(mysqli $conn): void {
     requireMethod('DELETE', 'POST');
@@ -425,13 +502,13 @@ function deleteUser(mysqli $conn): void {
         [$email]
     );
     if (!$target) {
-        respond(404, ['error' => 'user not found']);
+        respond(404, ['error' => 'User not found']);
     }
     $userId = (int)$target['ID'];
 
     $isSelf = (int)$acting['ID'] === $userId;
     if (!$isSelf && !canManageUser($acting, $target)) {
-        respond(403, ['error' => 'you are not allowed to delete this user']);
+        respond(403, ['error' => 'You are not allowed to delete this user']);
     }
 
     // Check what was asked for BEFORE anything is deleted
@@ -439,13 +516,13 @@ function deleteUser(mysqli $conn): void {
     $removeTypes = $body['remove'] ?? null;
     if ($removeTypes !== null) {
         if (!is_array($removeTypes) || !$removeTypes) {
-            respond(400, ['error' => 'remove must be a non-empty array of data types']);
+            respond(400, ['error' => 'Remove must be a non-empty array of data types']);
         }
         $clean = [];
         foreach ($removeTypes as $type) {
             $type = is_string($type) ? strtolower(trim($type)) : '';
             if (!in_array($type, $allowedTypes, true)) {
-                respond(400, ['error' => 'unknown type in remove', 'allowed' => $allowedTypes]);
+                respond(400, ['error' => 'Unknown type in remove list', 'allowed' => $allowedTypes]);
             }
             $clean[] = $type;
         }
@@ -457,25 +534,22 @@ function deleteUser(mysqli $conn): void {
         || in_array('user', $removeTypes, true);
 
     if ($deletesAccount && $target['role_name'] === 'root_admin' && rootAdminCount($conn) <= 1) {
-        respond(409, ['error' => 'the last root_admin cannot be deleted']);
+        respond(409, ['error' => 'The last root_admin cannot be deleted']);
     }
 
     try {
         $conn->begin_transaction();
 
-        // If no specific types are given, delete the user entirely (cascades all pages/events)
         if ($removeTypes === null) {
             run($conn, 'DELETE FROM user WHERE ID = ?', [$userId]);
             $conn->commit();
-            respond(200, ['message' => 'user and all associated data deleted', 'email' => $email]);
+            respond(200, ['message' => 'User and all associated data deleted', 'email' => $email]);
         }
 
-        // Process selective removal based on requested types
         foreach ($removeTypes as $type) {
             switch ($type) {
                 case 'calendar':
                 case 'calendar_event':
-                    // Delete calendar events and their underlying base pages for this user
                     run(
                         $conn,
                         'DELETE pg FROM page pg
@@ -486,7 +560,6 @@ function deleteUser(mysqli $conn): void {
                     break;
 
                 case 'wiki':
-                    // Delete wiki pages and their underlying base pages for this user
                     run(
                         $conn,
                         'DELETE pg FROM page pg
@@ -497,7 +570,6 @@ function deleteUser(mysqli $conn): void {
                     break;
 
                 case 'blog':
-                    // Delete blog pages and their underlying base pages for this user
                     run(
                         $conn,
                         'DELETE pg FROM page pg
@@ -509,7 +581,6 @@ function deleteUser(mysqli $conn): void {
 
                 case 'account':
                 case 'user':
-                    // Delete the user account itself (cascades any remaining pages/relations)
                     run($conn, 'DELETE FROM user WHERE ID = ?', [$userId]);
                     break;
             }
@@ -517,14 +588,13 @@ function deleteUser(mysqli $conn): void {
 
         $conn->commit();
         respond(200, [
-            'message' => 'requested user data removed successfully',
+            'message' => 'Requested user data removed successfully',
             'email' => $email,
             'removed_types' => $removeTypes
         ]);
 
     } catch (mysqli_sql_exception $e) {
         $conn->rollback();
-        // Handle foreign key constraint violations if any remain
         if ((int)$e->getCode() === 1451) {
             respond(409, ['error' => 'Cannot remove data because dependent records exist']);
         }

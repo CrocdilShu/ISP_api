@@ -1,17 +1,20 @@
 info:
-  name: Lägga ut inlägg
+  name: Ta bort Blogg
   type: http
-  seq: 2
+  seq: 4
 
 http:
-  method: POST
-  url: https://gosapi.ddev.site/services/bloggapi.php
+  method: DELETE
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=deleteBlog
+  params:
+    - name: action
+      value: deleteBlog
+      type: query
   body:
     type: json
     data: |-
       {
-        "titel": "Ett nytt grymt inlägg3",
-        "comment": "hej sötis"
+        "blog_id": 7
       }
   auth: inherit
 

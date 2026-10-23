@@ -1,0 +1,38 @@
+info:
+  name: Lägga ut inlägg
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=createPost
+  params:
+    - name: action
+      value: createPost
+      type: query
+  body:
+    type: multipart-form
+    data:
+      - name: blog_title
+        type: text
+        value: ""
+      - name: titel
+        type: text
+        value: ""
+      - name: content
+        type: text
+        value: ""
+      - name: visibility
+        type: text
+        value: public
+      - name: picture
+        type: text
+        value: ""
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

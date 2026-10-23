@@ -3,6 +3,7 @@ define('USER_API', true);   // lets the part files know they are loaded through 
 
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/providerauth.php';
+require_once __DIR__ . '/userpic.php';
 
 // Shared helpers
 require_once __DIR__ . '/../helpers.php';
@@ -23,6 +24,9 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'getUser':
         getUser($conn);
+        exit;
+    case 'getUserPic':
+        getUserPic($conn);
         exit;
     case 'loginUser':
         loginUser($conn);
@@ -55,6 +59,8 @@ switch ($action) {
     case 'editUser':        editUser($conn);        break;
     case 'deleteUser':      deleteUser($conn);      break;
     case 'rootLogin':       rootLogin($conn);       break;
+    case 'uploadUserPicture': uploadUserPicture($conn); break;
+    case 'deleteUserPicture': deleteUserPicture($conn); break;
     default:
         respond(404, ['error' => 'unknown action']);
         break;

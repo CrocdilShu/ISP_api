@@ -255,7 +255,7 @@ function getUser(mysqli $conn): void {
 // ---------------------------------------------------------------
 function createNewUser(mysqli $conn): void {
     requireMethod('POST');
-    $body = getBody();
+    $body = $_POST;
 
     // Validate email
     $email = trim((string)($body['email'] ?? ''));
@@ -271,7 +271,19 @@ function createNewUser(mysqli $conn): void {
 
     $password    = cleanPasswordInput($body['password'] ?? null);
     $description = array_key_exists('description', $body) ? cleanText255($body['description'], 'description') : null;
-    $pfpFile     = array_key_exists('pfp_file', $body) ? cleanText255($body['pfp_file'], 'pfp_file') : DEFAULT_PFP;
+    
+    // Handle profile picture
+    $pfpFile = DEFAULT_PFP;
+    if (isset($_FILES['pfp_file']) && $_FILES['pfp_file']['error'] !== UPLOAD_ERR_NO_FILE) {
+        try {
+            $pfpFile = uploadProfilePicture($_FILES['pfp_file']);
+        } catch (Exception $e) {
+            respond(400, ['error' => $e->getMessage()]);
+        }
+    } elseif (array_key_exists('pfp_file', $body) && !empty($body['pfp_file'])) {
+        // Allows passing a direct string path/url if not uploading a raw file
+        $pfpFile = cleanText255($body['pfp_file'], 'pfp_file');
+    }
 
     // If no role was given it defaults to role.ID 1, which is user
     $forRole = isset($body['FORrole']) ? (int)$body['FORrole'] : 1;
@@ -334,7 +346,7 @@ function createNewUser(mysqli $conn): void {
 // ---------------------------------------------------------------
 function editUser(mysqli $conn): void {
     requireMethod('PUT', 'POST');
-    $body = getBody();
+    $body = $_POST;
 
     $userId = (int)($body['user_id'] ?? 0);
     $targetEmail = trim((string)($body['target_email'] ?? ''));
@@ -404,8 +416,18 @@ function editUser(mysqli $conn): void {
         $params[] = cleanText255($body['description'], 'description');
     }
 
-    // Update profile picture file path (allows null to clear)
-    if (array_key_exists('pfp_file', $body)) {
+    // Handle Profile Picture Upload / Update
+    if (isset($_FILES['pfp_file']) && $_FILES['pfp_file']['error'] !== UPLOAD_ERR_NO_FILE) {
+        try {
+            // Passes existing pfp path so helper can delete the old file automatically
+            $pfpFilePath = uploadProfilePicture($_FILES['pfp_file'], $target['pfp_file'] ?? null);
+            $fields[] = 'pfp_file = ?';
+            $params[] = $pfpFilePath;
+        } catch (Exception $e) {
+            respond(400, ['error' => $e->getMessage()]);
+        }
+    } elseif (array_key_exists('pfp_file', $body)) {
+        // Allows clearing or updating via direct text string if no file upload stream was sent
         $fields[] = 'pfp_file = ?';
         $params[] = cleanText255($body['pfp_file'], 'pfp_file');
     }

@@ -25,9 +25,6 @@ switch ($action) {
     case 'getUser':
         getUser($conn);
         exit;
-    case 'getUserPic':
-        getUserPic($conn);
-        exit;
     case 'loginUser':
         loginUser($conn);
         exit;
@@ -59,8 +56,7 @@ switch ($action) {
     case 'editUser':        editUser($conn);        break;
     case 'deleteUser':      deleteUser($conn);      break;
     case 'rootLogin':       rootLogin($conn);       break;
-    case 'uploadUserPicture': uploadUserPicture($conn); break;
-    case 'deleteUserPicture': deleteUserPicture($conn); break;
+
     default:
         respond(404, ['error' => 'unknown action']);
         break;

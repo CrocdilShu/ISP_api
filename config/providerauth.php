@@ -2,7 +2,6 @@
 
 define('PROVIDER_BASE_URL', 'https://theprovider.ntigskovde.se');
 define('PROVIDER_VERIFY_URL', PROVIDER_BASE_URL . '/verify');
-define('PROVIDER_VERIFY_URL', PROVIDER_BASE_URL . '/verify');
 
 define('SERVICE_CALENDAR', 1);
 define('SERVICE_BLOG', 2);
@@ -107,47 +106,72 @@ function touchProviderSession(mysqli $conn, string $sessionKey): void {
 }
 
 function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$userId = null): bool {
+    $conn = ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
+
+    // If there is not session key then run getCompanySessionKey to get a new one
+    if (!$sessionKey && $conn) {
+        $sessionKey = getCompanySessionKey($conn);
+    }
+
     if (!$sessionKey) {
         return false;
     }
 
-    // 1. Check if the token exists locally and is still within its 30-minute window
-    if (isset($GLOBALS['conn']) && $GLOBALS['conn'] instanceof mysqli) {
+    // Check if the token is viable
+    if ($conn) {
         $localCheck = fetchOne(
-            $GLOBALS['conn'],
+            $conn,
             'SELECT 1 FROM root_user WHERE token = ? AND expire_date >= NOW()',
             [$sessionKey]
         );
+        
+        // If its not viable then get new one
         if (!$localCheck) {
-            return false; // Local session expired or doesn't exist
+            $sessionKey = getCompanySessionKey($conn);
+            if (!$sessionKey) {
+                return false;
+            }
         }
     }
 
-    // 2. Verify with the external provider
+    // Verify with provider
     $data = verifySessionWithProvider($sessionKey);
     if (!$data) {
-        return false;
+        // If theprovider dosnt validate it
+        if ($conn) {
+            $sessionKey = getCompanySessionKey($conn);
+            if (!$sessionKey) {
+                return false;
+            }
+            $data = verifySessionWithProvider($sessionKey);
+            if (!$data) {
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 
     $userId = isset($data['user_id']) ? (int)$data['user_id'] : null;
     $services = isset($data['services']) ? (int)$data['services'] : 0;
 
-    // Check if the service bit matches
+    //  If the service match
     if (($services & $requiredServiceBit) !== $requiredServiceBit) {
         return false;
     }
 
-    // 3. Extend the session expiration in root_user by 30 min (rolling window)
-    if (isset($GLOBALS['conn']) && $GLOBALS['conn'] instanceof mysqli) {
-        touchProviderSession($GLOBALS['conn'], $sessionKey);
+    // 3. Extend the expiretime
+    if ($conn) {
+        touchProviderSession($conn, $sessionKey);
     }
 
     return true;
 }
-function getCompanySessionKey(mysqli $conn): ?string {
-    $companyId = defined('COMPANY_ID'); //Set what company to watch for
 
-    // 1. Check if a valid, non-expired token already exists in the database
+function getCompanySessionKey(mysqli $conn): ?string {
+    $companyId = defined('COMPANY_ID') ? COMPANY_ID : NULL; 
+
+    // If a valid, non-expired token already exists in the database
     $stmt = $conn->prepare(
         "SELECT token FROM root_user WHERE ID = ? AND expire_date > NOW() LIMIT 1"
     );
@@ -161,24 +185,16 @@ function getCompanySessionKey(mysqli $conn): ?string {
         return $row['token'];
     }
 
-    // 2. Token is missing or expired -> Fetch username and password from the database via SQL
-    // (Assumes you have a column named 'password' or similar holding the credentials for the provider login)
-    $credStmt = $conn->prepare(
-        "SELECT username, password_hash FROM root_user WHERE ID = ? LIMIT 1"
-    );
-    $credStmt->bind_param("i", $companyId);
-    $credStmt->execute();
-    $credRow = $credStmt->get_result()->fetch_assoc();
-    $credStmt->close();
+    // Token is missing or expired we build the username dynamically e.g., 'gos_' + COMPANY_ID (e.g. gos_1, gos_2, etc.) and fetch the shared password from .env
+    $userPrefix = $_ENV['PROVIDER_API_USER'] ?? $_SERVER['PROVIDER_API_USER'] ?? 'gos_';
+    $username = $userPrefix . $companyId;
+    $password = $_ENV['PROVIDER_API_PASS'] ?? $_SERVER['PROVIDER_API_PASS'] ?? '';
 
-    if (!$credRow || empty($credRow['username']) || empty($credRow['password'])) {
-        return null; // If given wrong data
+    if (empty($password)) {
+        return null; // Password not configured in .env
     }
 
-    $username = $credRow['username'];
-    $password = $credRow['password'];
-
-    // Login using the providers api to get a kew or new key
+    // Login using the provider's API to get a new session key
     $providerLoginUrl = 'https://theprovider.ntigskovde.se/login'; 
     
     $ch = curl_init($providerLoginUrl);
@@ -198,17 +214,17 @@ function getCompanySessionKey(mysqli $conn): ?string {
     curl_close($ch);
 
     if ($response === false || $httpCode !== 200) {
-        return null; // If login failed
+        return null; // Provider login failed
     }
 
     $providerData = json_decode($response, true);
     if (!is_array($providerData) || empty($providerData['session_key'])) {
-        return null; // If wrong response format
+        return null; // Invalid response format
     }
 
     $sessionKey = $providerData['session_key'];
 
-    // Saves the key or updates the key in the database if a (old) key already exsisted
+    // Update the token and expiration date in the database for this specific company ID
     $updateStmt = $conn->prepare(
         "UPDATE root_user SET token = ?, expire_date = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE ID = ?"
     );

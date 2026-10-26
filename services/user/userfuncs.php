@@ -90,12 +90,11 @@ function cleanText255($raw, string $field): ?string {
 // optional: ?username=M  (filters users starting with M)
 // optional: ?start_id=40 (minimum user ID to start from)
 // optional: ?limit=100   (maximum number of users to return)
-// optional: ?step=3      (stride/step pattern: take 1, skip 2 = 3)
 // ---------------------------------------------------------------
 function getUser(mysqli $conn): void {
     requireMethod('GET');
 
-unset($u);
+    unset($u);
     // optional login: decides what the caller may see
     $acting = actingUserRow($conn, false);
     $actingId = $acting ? (int)$acting['ID'] : 0;
@@ -115,39 +114,30 @@ unset($u);
         }
     }
 
-    // Only getUser and nothing more: users with ID, username, and email (with pagination & step support)
+    // Only getUser and nothing more: users with ID, username, and email (with pagination)
     if ($pageType === '') {
         $startId = (int)($_GET['start_id'] ?? 0);
         $limit = (int)($_GET['limit'] ?? 100);
-        $step = (int)($_GET['step'] ?? 1);
 
         if ($limit <= 0) $limit = 100;
-        if ($step < 1) $step = 1;
 
-        // Build base inner query
-        $innerSql = 'SELECT u.ID, u.username, u.email, u.description, u.pfp_file FROM user u WHERE u.ID >= ?';
-        $innerParams = [$startId];
+        // Build base query with standard limit/offset handling via start_id
+        $sql = 'SELECT u.ID, u.username, u.email, u.description, u.pfp_file FROM user u WHERE u.ID >= ?';
+        $params = [$startId];
 
         if ($userId > 0) {
-            $innerSql .= ' AND u.ID = ?';
-            $innerParams[] = $userId;
+            $sql .= ' AND u.ID = ?';
+            $params[] = $userId;
         }
 
         $usernamePrefix = trim((string)($_GET['username'] ?? $_GET['name'] ?? ''));
         if ($usernamePrefix !== '') {
-            $innerSql .= ' AND u.username LIKE ?';
-            $innerParams[] = $usernamePrefix . '%';
+            $sql .= ' AND u.username LIKE ?';
+            $params[] = $usernamePrefix . '%';
         }
 
-        // Wrap with window function for step/stride filtering and limit caps
-        $sql = 'SELECT ID, username, email, description, pfp_file FROM (
-                    SELECT ID, username, email, description, pfp_file, ROW_NUMBER() OVER (ORDER BY ID ASC) AS row_num
-                    FROM (' . $innerSql . ') base
-                ) t
-                WHERE (row_num - 1) % ? = 0
-                LIMIT ?';
-
-        $params = array_merge($innerParams, [$step, $limit]);
+        $sql .= ' ORDER BY u.ID ASC LIMIT ?';
+        $params[] = $limit;
 
         $users = fetchAll($conn, $sql, $params);
         foreach ($users as &$user) {
@@ -160,7 +150,6 @@ unset($u);
         respond(200, [
             'start_id' => $startId,
             'limit' => $limit,
-            'step' => $step,
             'count' => count($users),
             'users' => $users
         ]);
@@ -282,7 +271,6 @@ function createNewUser(mysqli $conn): void {
             respond(400, ['error' => $e->getMessage()]);
         }
     } elseif (array_key_exists('pfp_file', $body) && !empty($body['pfp_file'])) {
-        // Allows passing a direct string path/url if not uploading a raw file
         $pfpFile = cleanText255($body['pfp_file'], 'pfp_file');
     }
 
@@ -292,7 +280,7 @@ function createNewUser(mysqli $conn): void {
     $firstUser = (int)fetchOne($conn, 'SELECT COUNT(*) AS n FROM user')['n'] === 0;
 
     if ($firstUser) {
-        // Nobody exists yet who could act as admin: the first user becomes root_admin
+        // Nobody exists yet: the very first user automatically becomes root_admin
         $role = fetchOne($conn, "SELECT ID, role_name FROM role WHERE role_name = 'root_admin'");
         if (!$role) {
             respond(500, ['error' => 'The role root_admin is missing in the database role table']);
@@ -307,9 +295,27 @@ function createNewUser(mysqli $conn): void {
         if (!$role) {
             respond(400, ['error' => 'Unknown role ID']);
         }
-        // you can only hand out roles up to your own
+
+        // Prevent admins from creating/assigning the root_admin role
+        if ($role['role_name'] === 'root_admin') {
+            respond(403, ['error' => 'A root_admin cannot create another root_admin']);
+        }
+
+        // You can only hand out roles up to your own aka user and admin but now root_admin
         if (roleLevel($role['role_name']) > roleLevel($acting['role_name'])) {
             respond(403, ['error' => 'You cannot assign a role higher than your own']);
+        }
+    }
+
+    // Strict system-wide check: Ensure only 1 root_admin can ever exist
+    if ($role['role_name'] === 'root_admin') {
+        $existingRoot = fetchOne(
+            $conn, 
+            'SELECT u.ID FROM user u JOIN role r ON u.FORrole = r.ID WHERE r.role_name = ?', 
+            ['root_admin']
+        );
+        if ($existingRoot) {
+            respond(403, ['error' => 'A root_admin already exists in the system']);
         }
     }
 

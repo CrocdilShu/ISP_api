@@ -33,18 +33,14 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // It only proves access; it is never an employee.
 // ---------------------------------------------------------------
 // 1. Fetch the stored company/root token from the local database
-$rootUser = fetchOne(
-    $conn, 
-    'SELECT token FROM root_user WHERE ID = ? LIMIT 1', 
-    [COMPANY_ID]
-);
-$storedSessionKey = $rootUser['token'] ?? null;
-
 $accountId = null;
 
-// 2. Validate the company's stored token against the provider's service bitmask
-if (!hasServiceAccess($storedSessionKey, SERVICE_CALENDAR, $accountId)) {
-    respond(403, ['error' => 'Company session token is invalid or expired. Please run rootLogin.']);
+// Get valid token or login
+$sessionKey = getCompanySessionKey($conn);
+
+// Validate against provider
+if (!hasServiceAccess($sessionKey, SERVICE_CALENDAR, $accountId)) {
+    respond(403, ['error' => 'Automated company session authentication failed.']);
 }
 
 $action = $_GET['action'] ?? '';

@@ -7,29 +7,34 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getCompanySessionKey($conn);
-$providerAccountId = null;
-
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
-if (!$hasWikiAccess) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
-    exit;
-}
 
 $wiki = new PageModule($conn, 'wiki');
 $denialReason = null;
 $actingUser = $wiki->resolveRequestUser($denialReason);
+
+// Automatically grant access if logged in via X-User-Token
+$hasWikiAccess = ($actingUser !== null);
+if (!$hasWikiAccess && (!empty($_SERVER['HTTP_X_SESSION_KEY']) || !empty($_SERVER['HTTP_AUTHORIZATION']))) {
+    $sessionKey = getCompanySessionKey($conn);
+    $providerAccountId = null;
+    $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+}
+
+if (!$hasWikiAccess) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service']);
+    exit;
+}
 
 if (!$actingUser) {
     http_response_code(401);
     echo json_encode(['success' => false, 'error' => $denialReason ?? 'Unauthorized: valid X-User-Token required']);
     exit;
 }
+
 $userId = (int)$actingUser['id'];
 $actingEmail = $actingUser['email'];
 
-// 1. GET: List all permissions for a Wiki (?wiki_id=1)
 if ($method === 'GET') {
     $wikiId = isset($_GET['wiki_id']) ? (int)$_GET['wiki_id'] : (isset($_GET['id']) ? (int)$_GET['id'] : 0);
 
@@ -66,7 +71,6 @@ if ($method === 'GET') {
     exit;
 }
 
-// 2. POST: Grant editor, co_owner, or transfer owner on a Wiki
 if ($method === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -92,7 +96,7 @@ if ($method === 'POST') {
     $targetUser = $wiki->getUserByEmail($targetEmail);
     if (!$targetUser || $wiki->isBannedFromService((int)$targetUser['id'], 'wiki')) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Target user email not found or user is banned from the wiki service']);
+        echo json_encode(['success' => false, 'error' => 'Target user email not found or user is banned']);
         exit;
     }
     $targetUserId = (int)$targetUser['id'];
@@ -100,7 +104,7 @@ if ($method === 'POST') {
     if ($permRole === 'owner') {
         if (!$wiki->isAdmin($userId) && (int)$space['_owner_id'] !== $userId) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'No rights to transfer ownership of this wiki (requires wiki owner or admin)']);
+            echo json_encode(['success' => false, 'error' => 'No rights to transfer ownership']);
             exit;
         }
         $wiki->transferSpaceOwnership($wikiId, $targetUserId);
@@ -116,19 +120,19 @@ if ($method === 'POST') {
 
     if (!in_array($permRole, ['editor', 'co_owner'], true)) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid role: must be editor, co_owner, or owner']);
+        echo json_encode(['success' => false, 'error' => 'Invalid role']);
         exit;
     }
 
     if (!$wiki->canEditSpace($wikiId, $userId, true)) {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to manage permissions for this wiki (requires wiki owner, co_owner, or admin)']);
+        echo json_encode(['success' => false, 'error' => 'No rights to manage permissions']);
         exit;
     }
 
     if ((int)$space['_owner_id'] === $targetUserId) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'User is already the owner of this wiki']);
+        echo json_encode(['success' => false, 'error' => 'User is already the owner']);
         exit;
     }
 
@@ -136,7 +140,7 @@ if ($method === 'POST') {
     http_response_code(201);
     echo json_encode([
         'success' => true,
-        'message' => 'Wiki permission granted (applies to all pages in this wiki)',
+        'message' => 'Permission granted',
         'wiki_id' => $wikiId,
         'email' => $targetUser['email'],
         'role' => $permRole
@@ -144,7 +148,6 @@ if ($method === 'POST') {
     exit;
 }
 
-// 3. DELETE: Remove permission or remove ownership on a Wiki
 if ($method === 'DELETE') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -170,17 +173,16 @@ if ($method === 'DELETE') {
     if ($removeOwnership || ($targetEmail !== '' && strcasecmp($targetEmail, $space['owner_email']) === 0)) {
         if ((int)$space['_owner_id'] !== $userId && !$wiki->isAdmin($userId)) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'No rights to remove ownership of this wiki (requires wiki owner or admin)']);
+            echo json_encode(['success' => false, 'error' => 'No rights to remove ownership']);
             exit;
         }
 
         $transfer = $wiki->removeSpaceOwnership($wikiId);
         echo json_encode([
             'success' => true,
-            'message' => 'Wiki ownership removed and reassigned',
+            'message' => 'Wiki ownership removed',
             'wiki_id' => $wikiId,
-            'new_owner_email' => $transfer['new_owner_email'],
-            'assigned_via' => $transfer['assigned_via']
+            'new_owner_email' => $transfer['new_owner_email']
         ]);
         exit;
     }
@@ -193,21 +195,21 @@ if ($method === 'DELETE') {
 
     if (!$wiki->canEditSpace($wikiId, $userId, true)) {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to revoke permissions for this wiki (requires wiki owner, co_owner, or admin)']);
+        echo json_encode(['success' => false, 'error' => 'No rights to revoke permissions']);
         exit;
     }
 
     $targetUser = $wiki->getUserByEmail($targetEmail);
     if (!$targetUser) {
         http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Target user email not found']);
+        echo json_encode(['success' => false, 'error' => 'Target user not found']);
         exit;
     }
 
     $wiki->removeSpacePermission($wikiId, (int)$targetUser['id']);
     echo json_encode([
         'success' => true,
-        'message' => 'Wiki permission removed',
+        'message' => 'Permission removed',
         'wiki_id' => $wikiId,
         'email' => $targetUser['email']
     ]);

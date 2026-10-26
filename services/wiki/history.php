@@ -7,19 +7,24 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getCompanySessionKey($conn);
-$providerAccountId = null;
-
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
-if (!$hasWikiAccess) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
-    exit;
-}
 
 $wiki = new PageModule($conn, 'wiki');
 $denialReason = null;
 $actingUser = $wiki->resolveRequestUser($denialReason);
+
+// Automatically grant access if logged in via X-User-Token
+$hasWikiAccess = ($actingUser !== null);
+if (!$hasWikiAccess && (!empty($_SERVER['HTTP_X_SESSION_KEY']) || !empty($_SERVER['HTTP_AUTHORIZATION']))) {
+    $sessionKey = getCompanySessionKey($conn);
+    $providerAccountId = null;
+    $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+}
+
+if (!$hasWikiAccess) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service']);
+    exit;
+}
 
 if (!$actingUser) {
     http_response_code(401);
@@ -30,7 +35,6 @@ if (!$actingUser) {
 $viewerId = (int)$actingUser['id'];
 $isAdmin = $wiki->isAdmin($viewerId);
 
-// 1. GET: Fetch specific history entry (?id=X) or list history (?page_id=Y&email=Z)
 if ($method === 'GET') {
     $historyId = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['history_id']) ? (int)$_GET['history_id'] : 0);
     $filterEmail = isset($_GET['email']) ? trim((string)$_GET['email']) : '';
@@ -140,7 +144,6 @@ if ($method === 'GET') {
     exit;
 }
 
-// 2. POST: Rollback a page to a previous history version (?history_id=X or {"history_id": X})
 if ($method === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -150,7 +153,7 @@ if ($method === 'POST') {
 
     if ($historyId <= 0) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid input: history_id is required to rollback']);
+        echo json_encode(['success' => false, 'error' => 'Invalid input: history_id is required']);
         exit;
     }
 
@@ -170,13 +173,13 @@ if ($method === 'POST') {
 
     if ($pageId <= 0 || !$wiki->getPage($pageId)) {
         http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Target page for this history entry no longer exists']);
+        echo json_encode(['success' => false, 'error' => 'Target page no longer exists']);
         exit;
     }
 
     if (!$wiki->canModifyPage($pageId, $viewerId, false)) {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to rollback pages in this wiki (requires wiki owner, co_owner, editor, or admin)']);
+        echo json_encode(['success' => false, 'error' => 'No rights to rollback this page']);
         exit;
     }
 
@@ -184,7 +187,7 @@ if ($method === 'POST') {
         $restoredPage = $wiki->rollbackPageToHistory($historyId, $viewerId);
         echo json_encode([
             'success' => true,
-            'message' => 'Page rolled back to history version #' . $historyId,
+            'message' => 'Page rolled back',
             'history_id' => $historyId,
             'page' => $restoredPage
         ]);

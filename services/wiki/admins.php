@@ -7,19 +7,24 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getCompanySessionKey($conn);
-$providerAccountId = null;
-
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
-if (!$hasWikiAccess) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
-    exit;
-}
 
 $wiki = new PageModule($conn, 'wiki');
 $denialReason = null;
 $actingUser = $wiki->resolveRequestUser($denialReason);
+
+// Automatically grant access if logged in via X-User-Token
+$hasWikiAccess = ($actingUser !== null);
+if (!$hasWikiAccess && (!empty($_SERVER['HTTP_X_SESSION_KEY']) || !empty($_SERVER['HTTP_AUTHORIZATION']))) {
+    $sessionKey = getCompanySessionKey($conn);
+    $providerAccountId = null;
+    $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+}
+
+if (!$hasWikiAccess) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service']);
+    exit;
+}
 
 if (!$actingUser) {
     http_response_code(401);
@@ -32,7 +37,6 @@ $actingEmail = $actingUser['email'];
 $currentUserRole = $actingUser['role'];
 $isAdmin = ($currentUserRole === 'admin' || $currentUserRole === 'root_admin');
 
-// 1. GET: List admins or search users by email (?search=abc&sort=ASC|DESC)
 if ($method === 'GET') {
     $search = trim((string)($_GET['search'] ?? ''));
     $order = strtoupper(trim((string)($_GET['sort'] ?? 'ASC'))) === 'DESC' ? 'DESC' : 'ASC';
@@ -77,7 +81,6 @@ if ($method === 'GET') {
     exit;
 }
 
-// 2. POST: Change role or ban user from 'wiki', 'blog', or 'all' ({"email": "user@test.com", "role": "banned", "service": "wiki|blog|all"})
 if ($method === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -89,14 +92,14 @@ if ($method === 'POST') {
 
     if ($targetEmail === '' || strcasecmp($targetEmail, $actingEmail) === 0) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid input: a valid target email (other than your own) is required']);
+        echo json_encode(['success' => false, 'error' => 'Invalid input: target email is required']);
         exit;
     }
 
     $targetUser = $wiki->getUserByEmail($targetEmail);
     if (!$targetUser) {
         http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Target user email not found']);
+        echo json_encode(['success' => false, 'error' => 'Target user not found']);
         exit;
     }
     $targetUserId = (int)$targetUser['id'];
@@ -105,19 +108,19 @@ if ($method === 'POST') {
     if ($newRoleName === 'banned') {
         if (!$isAdmin) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'No rights to ban users (requires admin or root_admin)']);
+            echo json_encode(['success' => false, 'error' => 'No rights to ban users']);
             exit;
         }
         if ($targetRole === 'root_admin' || ($targetRole === 'admin' && $currentUserRole !== 'root_admin')) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'No rights to ban an admin or root_admin']);
+            echo json_encode(['success' => false, 'error' => 'No rights to ban this user']);
             exit;
         }
 
         $transferredCount = $wiki->banUserFromService($targetUserId, $serviceScope);
         echo json_encode([
             'success' => true,
-            'message' => "User banned from {$serviceScope} and owned spaces transferred",
+            'message' => "User banned from {$serviceScope}",
             'email' => $targetUser['email'],
             'banned_service' => $serviceScope,
             'transferred_spaces' => $transferredCount
@@ -127,13 +130,7 @@ if ($method === 'POST') {
 
     if ($currentUserRole !== 'root_admin') {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to promote users to admin or root_admin (requires root_admin)']);
-        exit;
-    }
-
-    if (!in_array($newRoleName, ['admin', 'root_admin', 'user'], true)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid role: must be admin, root_admin, user, or banned']);
+        echo json_encode(['success' => false, 'error' => 'No rights to change roles']);
         exit;
     }
 
@@ -156,7 +153,6 @@ if ($method === 'POST') {
     exit;
 }
 
-// 3. DELETE: Remove admin rights or unban user ({"email": "user@test.com", "unban_service": "wiki|blog|all"})
 if ($method === 'DELETE') {
     $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
@@ -167,14 +163,14 @@ if ($method === 'DELETE') {
 
     if ($targetEmail === '' || strcasecmp($targetEmail, $actingEmail) === 0) {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid input: a valid target email (other than your own) is required']);
+        echo json_encode(['success' => false, 'error' => 'Invalid input: target email is required']);
         exit;
     }
 
     $targetUser = $wiki->getUserByEmail($targetEmail);
     if (!$targetUser) {
         http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Target user email not found']);
+        echo json_encode(['success' => false, 'error' => 'Target user not found']);
         exit;
     }
     $targetUserId = (int)$targetUser['id'];
@@ -182,7 +178,7 @@ if ($method === 'DELETE') {
     if ($unbanService !== null) {
         if (!$isAdmin) {
             http_response_code(403);
-            echo json_encode(['success' => false, 'error' => 'No rights to unban users (requires admin or root_admin)']);
+            echo json_encode(['success' => false, 'error' => 'No rights to unban users']);
             exit;
         }
         $wiki->unbanUserFromService($targetUserId, $unbanService);
@@ -197,7 +193,7 @@ if ($method === 'DELETE') {
 
     if ($currentUserRole !== 'root_admin') {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to demote admins (requires root_admin)']);
+        echo json_encode(['success' => false, 'error' => 'No rights to demote admins']);
         exit;
     }
 
@@ -211,7 +207,7 @@ if ($method === 'DELETE') {
 
     echo json_encode([
         'success' => true,
-        'message' => 'Admin role revoked (reset to user)',
+        'message' => 'Admin role revoked',
         'email' => $targetUser['email'],
         'role' => 'user'
     ]);

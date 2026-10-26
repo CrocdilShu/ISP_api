@@ -7,26 +7,31 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getCompanySessionKey($conn);
-$providerAccountId = null;
-
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
-if (!$hasWikiAccess) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
-    exit;
-}
 
 $wiki = new PageModule($conn, 'wiki');
 $denialReason = null;
 $actingUser = $wiki->resolveRequestUser($denialReason);
+$userId = $actingUser ? (int)$actingUser['id'] : null;
 
-if (!$actingUser) {
+// Automatically grant wiki access if logged in via X-User-Token
+$hasWikiAccess = ($actingUser !== null);
+if (!$hasWikiAccess && (!empty($_SERVER['HTTP_X_SESSION_KEY']) || !empty($_SERVER['HTTP_AUTHORIZATION']))) {
+    $sessionKey = getCompanySessionKey($conn);
+    $providerAccountId = null;
+    $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+}
+
+if (!$hasWikiAccess) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service']);
+    exit;
+}
+
+if (!$userId) {
     http_response_code(401);
     echo json_encode(['success' => false, 'error' => $denialReason ?? 'Unauthorized: valid X-User-Token required']);
     exit;
 }
-$userId = (int)$actingUser['id'];
 
 function requireViewableWikiPage(PageModule $wiki, int $pageId, int $userId): array {
     $page = $wiki->getPage($pageId);
@@ -37,7 +42,7 @@ function requireViewableWikiPage(PageModule $wiki, int $pageId, int $userId): ar
     }
     if (!$wiki->canViewPage($page, $userId)) {
         http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'No rights to view or comment on pages in this private wiki']);
+        echo json_encode(['success' => false, 'error' => 'No rights to view this page or its comments']);
         exit;
     }
     return $page;
@@ -77,7 +82,7 @@ if ($method === 'POST') {
 
     if ($pageId <= 0 || !isset($input['content']) || trim($wiki->normalizePlainText($input['content'])) === '') {
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid input: page_id and non-empty text content are required']);
+        echo json_encode(['success' => false, 'error' => 'Invalid input: page_id and non-empty content are required']);
         exit;
     }
 

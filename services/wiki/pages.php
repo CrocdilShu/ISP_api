@@ -7,13 +7,28 @@ require_once __DIR__ . '/../common/PageModule.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $method = $_SERVER['REQUEST_METHOD'];
-$sessionKey = getCompanySessionKey($conn);
-$providerAccountId = null;
 
-$hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+$wiki = new PageModule($conn, 'wiki');
+$denialReason = null;
+$actingUser = $wiki->resolveRequestUser($denialReason);
+$viewerId = $actingUser ? (int)$actingUser['id'] : null;
+
+// Automatically grant wiki access if the user is logged in via X-User-Token
+$hasWikiAccess = ($actingUser !== null);
+
+// Optional fallback: if no user token is sent, check provider session key if header exists
+if (!$hasWikiAccess && (!empty($_SERVER['HTTP_X_SESSION_KEY']) || !empty($_SERVER['HTTP_AUTHORIZATION']))) {
+    $sessionKey = getCompanySessionKey($conn);
+    $providerAccountId = null;
+    $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+}
+
 if (!$hasWikiAccess) {
     http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
+    echo json_encode([
+        'success' => false, 
+        'error' => 'No rights to access the wiki service. Please provide a valid X-User-Token header.'
+    ]);
     exit;
 }
 

@@ -10,7 +10,6 @@ require_once __DIR__ . '/../helpers.php';
 // User files that contains the funcs
 require_once __DIR__ . '/userfuncs.php';
 require_once __DIR__ . '/userlogin.php';
-require_once __DIR__ . '/rootlogin.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -33,20 +32,14 @@ switch ($action) {
 }
 
 // For all other actions, check authentication/service access first
-if ($action !== 'rootLogin') {
-    $rootUser = fetchOne(
-        $conn, 
-        'SELECT token FROM root_user WHERE ID = ? LIMIT 1', 
-        [COMPANY_ID]
-    );
-    $storedSessionKey = $rootUser['token'] ?? null;
+$accountId = null;
 
-    $accountId = null;
+// Get valid token OR trigger the auto login
+$sessionKey = getCompanySessionKey($conn);
 
-    // 2. Validate the company's stored token against the provider's service bitmask
-    if (!hasServiceAccess($storedSessionKey, SERVICE_CALENDAR, $accountId)) {
-        respond(403, ['error' => 'Company session token is invalid or expired. Please run rootLogin.']);
-    }
+// Validate against provider
+if (!hasServiceAccess($sessionKey, SERVICE_CALENDAR, $accountId)) {
+    respond(403, ['error' => 'Automated company session authentication failed.']);
 }
 
 // Handle protected actions

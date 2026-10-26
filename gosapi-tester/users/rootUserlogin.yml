@@ -14,7 +14,7 @@ http:
     type: json
     data: |-
       {
-        "username": "gos_1", 
+        "username": "gos_4", 
         "password": "**test**"
       }
   auth: inherit

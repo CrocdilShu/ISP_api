@@ -10,6 +10,9 @@ http:
     - name: action
       value: getInvites
       type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

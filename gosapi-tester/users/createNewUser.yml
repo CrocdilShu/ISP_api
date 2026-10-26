@@ -5,7 +5,7 @@ info:
 
 http:
   method: POST
-  url: https://gosapi.ddev.site:8443/services/user/user.php?action=createNewUser
+  url: "{{baseUrl}}user/user.php?action=createNewUser"
   headers:
     - name: X-Session-Key
       value: bf152400ff237740ab3fa5b1db2300addc4d70b43ad835073e02fe88d5575a7e
@@ -14,16 +14,32 @@ http:
       value: createNewUser
       type: query
   body:
-    type: json
-    data: |-
-      {
-           "email": "maozedong@ww2.com",
-           "username": "MaoZedong",
-           "password": "MAOZEDONG", 
-           "description": "Old chines ruler2",
-           "pfp_file": "maobest.jpeg",
-           "FORrole": 1 
-      }
+    type: multipart-form
+    data:
+      - name: email
+        type: text
+        value: testuser500@gmail.com
+        contentType: Text
+      - name: username
+        type: text
+        value: testuser_500
+        contentType: Text
+      - name: password
+        type: text
+        value: password123
+        contentType: Text
+      - name: description
+        type: text
+        value: user500 is best
+        contentType: Text
+      - name: pfp_file
+        type: text
+        value: user500.jpeg
+        contentType: Text
+      - name: FORrole
+        type: text
+        value: "2"
+        contentType: Text
   auth: inherit
 
 settings:

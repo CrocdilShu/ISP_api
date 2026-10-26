@@ -1,18 +1,18 @@
 info:
-  name: Create wiki
+  name: hämta data från inlägg
   type: http
-  seq: 2
+  seq: 1
 
 http:
-  method: POST
-  url: "{{baseUrl}}pages.php?type=wiki"
+  method: GET
+  url: https://gosapi.ddev.site/services/bloggapi.php?title=brodequin
   params:
-    - name: type
-      value: wiki
+    - name: title
+      value: brodequin
       type: query
   body:
     type: json
-    data: '{"titel":"Test wiki","description":"x","visibility":"public"}'
+    data: ""
   auth: inherit
 
 settings:

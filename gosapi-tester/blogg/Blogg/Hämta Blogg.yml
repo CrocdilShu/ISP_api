@@ -1,11 +1,15 @@
 info:
-  name: hämta data från inlägg id
+  name: Hämta Blogg
   type: http
   seq: 1
 
 http:
   method: GET
-  url: https://gosapi.ddev.site/services/bloggapi.php
+  url: https://gosapi.ddev.site/services/bloggapi.php?action=listBlogs
+  params:
+    - name: action
+      value: listBlogs
+      type: query
   auth: inherit
 
 settings:

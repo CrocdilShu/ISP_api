@@ -2,10 +2,13 @@
 
 define('PROVIDER_BASE_URL', 'https://theprovider.ntigskovde.se');
 define('PROVIDER_VERIFY_URL', PROVIDER_BASE_URL . '/verify');
+define('PROVIDER_VERIFY_URL', PROVIDER_BASE_URL . '/verify');
 
 define('SERVICE_CALENDAR', 1);
 define('SERVICE_BLOG', 2);
 define('SERVICE_WIKI', 4);
+
+
 
 // Define session duration extension
 const PROVIDER_SESSION_MINUTES = 30;
@@ -142,12 +145,78 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
     return true;
 }
 function getCompanySessionKey(mysqli $conn): ?string {
-    $companyId = COMPANY_ID;
+    $companyId = defined('COMPANY_ID'); //Set what company to watch for
+
+    // 1. Check if a valid, non-expired token already exists in the database
     $stmt = $conn->prepare(
         "SELECT token FROM root_user WHERE ID = ? AND expire_date > NOW() LIMIT 1"
     );
     $stmt->bind_param("i", $companyId);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
-    return $row['token'] ?? null;
+    $stmt->close();
+
+    // If a valid token exists, return it immediately
+    if (!empty($row['token'])) {
+        return $row['token'];
+    }
+
+    // 2. Token is missing or expired -> Fetch username and password from the database via SQL
+    // (Assumes you have a column named 'password' or similar holding the credentials for the provider login)
+    $credStmt = $conn->prepare(
+        "SELECT username, password_hash FROM root_user WHERE ID = ? LIMIT 1"
+    );
+    $credStmt->bind_param("i", $companyId);
+    $credStmt->execute();
+    $credRow = $credStmt->get_result()->fetch_assoc();
+    $credStmt->close();
+
+    if (!$credRow || empty($credRow['username']) || empty($credRow['password'])) {
+        return null; // If given wrong data
+    }
+
+    $username = $credRow['username'];
+    $password = $credRow['password'];
+
+    // Login using the providers api to get a kew or new key
+    $providerLoginUrl = 'https://theprovider.ntigskovde.se/login'; 
+    
+    $ch = curl_init($providerLoginUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS => json_encode([
+            'username' => $username,
+            'password' => $password
+        ]),
+        CURLOPT_TIMEOUT => 5,
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($response === false || $httpCode !== 200) {
+        return null; // If login failed
+    }
+
+    $providerData = json_decode($response, true);
+    if (!is_array($providerData) || empty($providerData['session_key'])) {
+        return null; // If wrong response format
+    }
+
+    $sessionKey = $providerData['session_key'];
+
+    // Saves the key or updates the key in the database if a (old) key already exsisted
+    $updateStmt = $conn->prepare(
+        "UPDATE root_user SET token = ?, expire_date = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE ID = ?"
+    );
+    if ($updateStmt) {
+        $updateStmt->bind_param("si", $sessionKey, $companyId);
+        $updateStmt->execute();
+        $updateStmt->close();
+    }
+
+    return $sessionKey;
 }

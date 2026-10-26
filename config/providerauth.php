@@ -22,14 +22,6 @@ function getRequestSessionKey(): ?string {
     if (!empty($_SERVER['HTTP_X_SESSION_KEY'])) {
         return trim($_SERVER['HTTP_X_SESSION_KEY']);
     }
-    
-    // Check standard Authorization Bearer header
-    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
-        $authHeader = trim($_SERVER['HTTP_AUTHORIZATION']);
-        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
-            return trim($matches[1]);
-        }
-    }
 
     // Fallback redirect authorization
     if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {

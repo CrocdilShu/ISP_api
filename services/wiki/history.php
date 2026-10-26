@@ -11,116 +11,189 @@ $sessionKey = getCompanySessionKey($conn);
 $providerAccountId = null;
 
 $hasWikiAccess = hasServiceAccess($sessionKey, SERVICE_WIKI, $providerAccountId);
+if (!$hasWikiAccess) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'No rights to access the wiki service (invalid company session key)']);
+    exit;
+}
 
 $wiki = new PageModule($conn, 'wiki');
-$userId = $hasWikiAccess ? $wiki->resolveRequestUser() : null;
+$denialReason = null;
+$actingUser = $wiki->resolveRequestUser($denialReason);
 
-if ((!$hasWikiAccess) or (!$userId)) {
+if (!$actingUser) {
     http_response_code(401);
-    echo json_encode(['error' => 'Unauthorized']);
+    echo json_encode(['success' => false, 'error' => $denialReason ?? 'Unauthorized: valid X-User-Token required']);
     exit;
 }
 
-if ($method !== 'GET') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
-}
-
-$viewerId = (int)$userId;
+$viewerId = (int)$actingUser['id'];
 $isAdmin = $wiki->isAdmin($viewerId);
-$pageAccessCache = [];
 
-$canSeeEntry = function (array $row) use ($wiki, $viewerId, $isAdmin, &$pageAccessCache): bool {
-    if ($isAdmin || (int)$row['edited_by_id'] === $viewerId) {
-        return true;
-    }
-    $pageId = is_array($row['old_text']) ? (int)($row['old_text']['_page_id'] ?? 0) : 0;
-    if (!$pageId) {
-        return false;
-    }
-    if (!array_key_exists($pageId, $pageAccessCache)) {
-        $pageAccessCache[$pageId] = $wiki->canViewPageId($pageId, $viewerId);
-    }
-    return $pageAccessCache[$pageId];
-};
+// 1. GET: Fetch specific history entry (?id=X) or list history (?page_id=Y&email=Z)
+if ($method === 'GET') {
+    $historyId = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['history_id']) ? (int)$_GET['history_id'] : 0);
+    $filterEmail = isset($_GET['email']) ? trim((string)$_GET['email']) : '';
+    $filterPageId = isset($_GET['page_id']) ? (int)$_GET['page_id'] : 0;
+    $order = strtoupper(trim((string)($_GET['sort'] ?? 'DESC'))) === 'ASC' ? 'ASC' : 'DESC';
 
-$historyId = isset($_GET['id']) ? (int)$_GET['id'] : null;
-$filterUserId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : null;
-$filterPageId = isset($_GET['page_id']) ? (int)$_GET['page_id'] : null;
-$order = strtoupper(trim((string)($_GET['sort'] ?? 'DESC'))) === 'ASC' ? 'ASC' : 'DESC';
+    $formatHistoryRow = function (array $row) use ($wiki): array {
+        $decoded = json_decode($row['old_text'], true);
+        $pageId = is_array($decoded) ? (int)($decoded['_page_id'] ?? 0) : 0;
+        $oldTitle = is_array($decoded) && isset($decoded['titel']) ? (string)$decoded['titel'] : null;
+        $oldContent = is_array($decoded) && isset($decoded['content'])
+            ? $wiki->normalizePlainText($decoded['content'])
+            : $wiki->normalizePlainText($decoded);
 
-// 1. Specifik historikpost (?id=X)
-if ($historyId) {
-    $stmt = $conn->prepare("
-        SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
-               h.FORuser AS edited_by_id, u.username AS edited_by_username
-        FROM update_history h
-        JOIN `user` u ON h.FORuser = u.ID
-        WHERE h.ID = ?
-    ");
-    $stmt->bind_param("i", $historyId);
-    $stmt->execute();
-    $entry = $stmt->get_result()->fetch_assoc();
+        return [
+            'history_id' => (int)$row['history_id'],
+            'page_id' => $pageId,
+            'edited_by_email' => $row['edited_by_email'],
+            'update_at' => $row['update_at'],
+            'old_titel' => $oldTitle,
+            'old_content' => $oldContent,
+            'removed_pic' => $row['removed_pic']
+        ];
+    };
 
-    if (!$entry) {
-        http_response_code(404);
-        echo json_encode(['error' => 'Not found']);
+    if ($historyId > 0) {
+        $stmt = $conn->prepare("
+            SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
+                   u.email AS edited_by_email, h.FORuser AS _edited_by_id
+            FROM update_history h
+            JOIN `user` u ON h.FORuser = u.ID
+            WHERE h.ID = ?
+        ");
+        $stmt->bind_param("i", $historyId);
+        $stmt->execute();
+        $entry = $stmt->get_result()->fetch_assoc();
+
+        if (!$entry) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'History entry not found']);
+            exit;
+        }
+
+        $formatted = $formatHistoryRow($entry);
+        $canSee = $isAdmin
+            || ((int)$entry['_edited_by_id'] === $viewerId)
+            || ($formatted['page_id'] > 0 && $wiki->canViewPageId($formatted['page_id'], $viewerId));
+
+        if (!$canSee) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'No rights to view this history entry']);
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'History entry fetched',
+            'entry' => $formatted
+        ]);
         exit;
     }
 
-    $entry['old_text'] = json_decode($entry['old_text'], true);
-
-    if (!$canSeeEntry($entry)) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Forbidden']);
-        exit;
+    if ($filterEmail !== '') {
+        $stmt = $conn->prepare("
+            SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
+                   u.email AS edited_by_email, h.FORuser AS _edited_by_id
+            FROM update_history h
+            JOIN `user` u ON h.FORuser = u.ID
+            WHERE u.email = ?
+            ORDER BY h.update_at $order
+        ");
+        $stmt->bind_param("s", $filterEmail);
+        $stmt->execute();
+        $res = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    } else {
+        $result = $conn->query("
+            SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
+                   u.email AS edited_by_email, h.FORuser AS _edited_by_id
+            FROM update_history h
+            JOIN `user` u ON h.FORuser = u.ID
+            ORDER BY h.update_at $order
+        ");
+        $res = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
     }
 
-    echo json_encode(['success' => true, 'entry' => $entry]);
-    exit;
-}
-
-// 2. Lista historik
-if ($filterUserId) {
-    $stmt = $conn->prepare("
-        SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
-               h.FORuser AS edited_by_id, u.username AS edited_by_username
-        FROM update_history h
-        JOIN `user` u ON h.FORuser = u.ID
-        WHERE h.FORuser = ?
-        ORDER BY h.update_at $order
-    ");
-    $stmt->bind_param("i", $filterUserId);
-    $stmt->execute();
-    $res = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-} else {
-    $result = $conn->query("
-        SELECT h.ID AS history_id, h.update_at, h.old_text, h.removed_pic,
-               h.FORuser AS edited_by_id, u.username AS edited_by_username
-        FROM update_history h
-        JOIN `user` u ON h.FORuser = u.ID
-        ORDER BY h.update_at $order
-    ");
-    $res = $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
-}
-
-$visible = [];
-foreach ($res as $row) {
-    $row['old_text'] = json_decode($row['old_text'], true);
-    if ($filterPageId) {
-        $entryPageId = is_array($row['old_text']) ? (int)($row['old_text']['_page_id'] ?? 0) : 0;
-        if ($entryPageId !== $filterPageId) {
+    $visible = [];
+    foreach ($res as $row) {
+        $formatted = $formatHistoryRow($row);
+        if ($filterPageId > 0 && $formatted['page_id'] !== $filterPageId) {
             continue;
         }
+        $canSee = $isAdmin
+            || ((int)$row['_edited_by_id'] === $viewerId)
+            || ($formatted['page_id'] > 0 && $wiki->canViewPageId($formatted['page_id'], $viewerId));
+
+        if ($canSee) {
+            $visible[] = $formatted;
+        }
     }
-    if ($canSeeEntry($row)) {
-        $visible[] = $row;
-    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'History listed',
+        'count' => count($visible),
+        'history' => $visible
+    ]);
+    exit;
 }
 
-echo json_encode([
-    'success' => true,
-    'count' => count($visible),
-    'history' => $visible
-]);
+// 2. POST: Rollback a page to a previous history version (?history_id=X or {"history_id": X})
+if ($method === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($input)) {
+        $input = [];
+    }
+    $historyId = isset($_GET['history_id']) ? (int)$_GET['history_id'] : (int)($input['history_id'] ?? ($_GET['id'] ?? ($input['id'] ?? 0)));
+
+    if ($historyId <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Invalid input: history_id is required to rollback']);
+        exit;
+    }
+
+    $stmt = $conn->prepare("SELECT old_text FROM update_history WHERE ID = ? LIMIT 1");
+    $stmt->bind_param("i", $historyId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+
+    if (!$row) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'History entry not found']);
+        exit;
+    }
+
+    $decoded = json_decode($row['old_text'], true);
+    $pageId = is_array($decoded) ? (int)($decoded['_page_id'] ?? 0) : 0;
+
+    if ($pageId <= 0 || !$wiki->getPage($pageId)) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'error' => 'Target page for this history entry no longer exists']);
+        exit;
+    }
+
+    if (!$wiki->canModifyPage($pageId, $viewerId, false)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'No rights to rollback pages in this wiki (requires wiki owner, co_owner, editor, or admin)']);
+        exit;
+    }
+
+    try {
+        $restoredPage = $wiki->rollbackPageToHistory($historyId, $viewerId);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Page rolled back to history version #' . $historyId,
+            'history_id' => $historyId,
+            'page' => $restoredPage
+        ]);
+    } catch (Exception $e) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+http_response_code(405);
+echo json_encode(['success' => false, 'error' => 'Method not allowed']);

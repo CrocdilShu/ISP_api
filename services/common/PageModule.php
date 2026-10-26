@@ -38,7 +38,7 @@ class PageModule {
      * USER & EMAIL RESOLUTION + SERVICE BANS
      * ========================================================================
      */
-    public function resolveRequestUser( ?string &$denialReason = null ): ?array {
+    public function resolveRequestUser(?string &$denialReason = null): ?array {
         $token = function_exists('getUserToken') ? getUserToken() : null;
         if ($token === null || $token === '') {
             $headers = function_exists('getallheaders') ? getallheaders() : [];
@@ -96,7 +96,9 @@ class PageModule {
 
     public function getUserByEmail(string $email): ?array {
         $email = trim($email);
-        if ($email === '') return null;
+        if ($email === '') {
+            return null;
+        }
         $stmt = $this->conn->prepare("
             SELECT u.ID AS id, u.email, u.username, r.role_name AS role
             FROM `user` u
@@ -107,7 +109,9 @@ class PageModule {
         $stmt->bind_param("s", $email);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
-        if (!$row) return null;
+        if (!$row) {
+            return null;
+        }
         $row['id'] = (int)$row['id'];
         return $row;
     }
@@ -147,7 +151,9 @@ class PageModule {
             WHERE FORuser = ? AND service IN (?, 'all')
             LIMIT 1
         ");
-        if (!$stmt) return false;
+        if (!$stmt) {
+            return false;
+        }
         $stmt->bind_param("is", $userId, $service);
         $stmt->execute();
         return (bool)$stmt->get_result()->fetch_assoc();
@@ -155,7 +161,9 @@ class PageModule {
 
     public function getUserBannedServices(int $userId): array {
         $stmt = $this->conn->prepare("SELECT service FROM service_ban WHERE FORuser = ? ORDER BY service ASC");
-        if (!$stmt) return [];
+        if (!$stmt) {
+            return [];
+        }
         $stmt->bind_param("i", $userId);
         $stmt->execute();
         return array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'service');
@@ -190,9 +198,6 @@ class PageModule {
         return ($v === 'public' || $v === 'private') ? $v : null;
     }
 
-    /**
-     * Converts any incoming content into plain text (no block objects)
-     */
     public function normalizePlainText(mixed $content): string {
         if (is_string($content)) {
             $decoded = json_decode($content, true);
@@ -230,31 +235,122 @@ class PageModule {
 
     /**
      * ========================================================================
-     * BILDHANTERING I DATABASEN (Tabellen `picture`)
+     * PICTURE STORAGE & SOFT-DELETE RETENTION (services/wiki/pics)
      * ========================================================================
      */
-    public function savePagePictures(int $pageId, int $userId, array $pictures): void {
+    private function getPicsBaseDir(): string {
+        $dir = dirname(__DIR__) . '/' . $this->serviceType . '/pics';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        return $dir;
+    }
+
+    public function purgeExpiredPictures(): int {
+        $days = self::PICTURE_RETENTION_DAYS;
+        $stmt = $this->conn->prepare("
+            SELECT ID, file_path, FORpage, filename
+            FROM picture
+            WHERE deleted_at IS NOT NULL
+              AND deleted_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+        ");
+        if (!$stmt) {
+            return 0;
+        }
+        $stmt->bind_param("i", $days);
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        $count = 0;
+        foreach ($rows as $row) {
+            $relPath = !empty($row['file_path'])
+                ? preg_replace('#^services/' . preg_quote($this->serviceType, '#') . '/pics/#', '', (string)$row['file_path'])
+                : ('pages/' . (int)$row['FORpage'] . '/' . basename((string)$row['filename']));
+            $this->picDeletePhysicalFile($relPath);
+
+            $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ?");
+            if ($del) {
+                $picId = (int)$row['ID'];
+                $del->bind_param("i", $picId);
+                $del->execute();
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    private function picWritePhysicalFile(string $subPath, array $item): string {
+        $baseDir = $this->getPicsBaseDir();
+        $targetDir = $baseDir . '/' . ltrim($subPath, '/');
+
+        if (!is_dir($targetDir)) {
+            mkdir($targetDir, 0755, true);
+        }
+
+        $filename = $item['filename'] ?? ('image_' . uniqid('', true) . '.png');
+        $filename = basename($filename);
+        $filePath = $targetDir . '/' . $filename;
+        $relativePath = ltrim($subPath, '/') . '/' . $filename;
+
+        if (isset($item['tmp_name']) && file_exists($item['tmp_name'])) {
+            move_uploaded_file($item['tmp_name'], $filePath);
+        } else {
+            $data = $item['data'] ?? ($item['image_data'] ?? '');
+            if (!empty($data)) {
+                if (preg_match('/^data:image\/(\w+);base64,/', $data)) {
+                    $data = substr($data, strpos($data, ',') + 1);
+                    $data = base64_decode($data);
+                } elseif (base64_decode($data, true) !== false) {
+                    $data = base64_decode($data);
+                }
+                file_put_contents($filePath, $data);
+            } else {
+                if (!file_exists($filePath)) {
+                    file_put_contents($filePath, '');
+                }
+            }
+        }
+
+        return $relativePath;
+    }
+
+    private function picDeletePhysicalFile(string $relativePath): void {
+        $baseDir = $this->getPicsBaseDir();
+        $fullPath = $baseDir . '/' . ltrim($relativePath, '/');
+        if (file_exists($fullPath) && is_file($fullPath)) {
+            @unlink($fullPath);
+        }
+    }
+
+    public function savePagePictures(int $pageId, int $userId, array $items): void {
         $stmt = $this->conn->prepare("
             INSERT INTO picture (filename, mime_type, image_data, file_path, deleted_at, FORpage, FORuser)
             VALUES (?, ?, ?, ?, NULL, ?, ?)
         ");
-        foreach ($pictures as $pic) {
-            if (is_string($pic)) {
-                $filename = basename($pic);
-                $mimeType = 'image/jpeg';
-                $data = $pic;
-            } else {
-                if (!is_array($pic) || (empty($pic['data']) && empty($pic['image_data']))) { 
-                    continue; 
+        foreach ($items as $item) {
+            if (is_string($item)) {
+                $filename = basename($item);
+                $relativePath = 'pages/' . $pageId . '/' . $filename;
+                $fullDir = $this->getPicsBaseDir() . '/pages/' . $pageId;
+                if (!is_dir($fullDir)) {
+                    mkdir($fullDir, 0755, true);
                 }
-                $filename = trim((string)($pic['filename'] ?? 'image.png'));
-                $mimeType = trim((string)($pic['mime_type'] ?? 'image/jpeg'));
-                $data = (string)($pic['data'] ?? $pic['image_data']);
+                $fullPath = $fullDir . '/' . $filename;
+                if (!file_exists($fullPath)) {
+                    file_put_contents($fullPath, '');
+                }
+                $mime = 'image/png';
+                $data = '';
+            } else {
+                $relativePath = $this->picWritePhysicalFile('pages/' . $pageId, $item);
+                $filename = $item['filename'] ?? basename($relativePath);
+                $mime = $item['mime'] ?? ($item['mime_type'] ?? 'image/png');
+                $data = $item['data'] ?? ($item['image_data'] ?? '');
             }
-            $stmt->bind_param("sssii", $filename, $mimeType, $data, $pageId, $userId);
+            $fullServicePath = 'services/' . $this->serviceType . '/pics/' . $relativePath;
+            $stmt->bind_param("ssssii", $filename, $mime, $data, $fullServicePath, $pageId, $userId);
             $stmt->execute();
         }
-        $stmt->close();
     }
 
     public function getPagePictures(int $pageId, bool $includeSoftDeleted = false): array {
@@ -269,40 +365,49 @@ class PageModule {
         ");
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
-        $res = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        $stmt->close();
-        return $res;
-    }
-
-    /**
-     * Soft-deletes a picture (sets deleted_at = NOW() and keeps file on disk for X days for history rollbacks)
-     */
-    public function softDeletePictureByIdOrName(int $pageId, string $identifier): ?string {
-        if (ctype_digit($identifier)) {
-            $picId = (int)$identifier;
-            $stmt = $this->conn->prepare("SELECT filename FROM picture WHERE ID = ? AND FORpage = ?");
-            $stmt->bind_param("ii", $picId, $pageId);
-            $stmt->execute();
-            $row = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
-            if ($row) {
-                $del = $this->conn->prepare("DELETE FROM picture WHERE ID = ? AND FORpage = ?");
-                $del->bind_param("ii", $picId, $pageId);
-                $del->execute();
-                $del->close();
-                return $row['filename'];
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        foreach ($rows as &$r) {
+            $r['picture_id'] = (int)$r['picture_id'];
+            if (empty($r['file_path'])) {
+                $r['file_path'] = 'services/' . $this->serviceType . '/pics/pages/' . $pageId . '/' . $r['filename'];
             }
-        } else {
-            $del = $this->conn->prepare("DELETE FROM picture WHERE filename = ? AND FORpage = ?");
-            $del->bind_param("si", $identifier, $pageId);
-            $del->execute();
-            $affected = $del->affected_rows;
-            $del->close();
-            if ($affected > 0) {
-                return $identifier;
+            if (!$includeSoftDeleted) {
+                unset($r['deleted_at']);
             }
         }
-        return $identifier;
+        unset($r);
+        return $rows;
+    }
+
+    public function softDeletePictureByIdOrName(int $pageId, string $identifier): ?string {
+        if (ctype_digit($identifier)) {
+            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE ID = ? AND FORpage = ? AND deleted_at IS NULL");
+            $picId = (int)$identifier;
+            $stmt->bind_param("ii", $picId, $pageId);
+        } else {
+            $stmt = $this->conn->prepare("SELECT ID, filename FROM picture WHERE filename = ? AND FORpage = ? AND deleted_at IS NULL");
+            $stmt->bind_param("si", $identifier, $pageId);
+        }
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        foreach ($rows as $row) {
+            $upd = $this->conn->prepare("UPDATE picture SET deleted_at = NOW() WHERE ID = ?");
+            $rowId = (int)$row['ID'];
+            $upd->bind_param("i", $rowId);
+            $upd->execute();
+        }
+        return $rows ? $rows[0]['filename'] : null;
+    }
+
+    public function restorePictureByName(int $pageId, string $filename): bool {
+        $stmt = $this->conn->prepare("
+            UPDATE picture
+            SET deleted_at = NULL
+            WHERE FORpage = ? AND filename = ? AND deleted_at IS NOT NULL
+        ");
+        $stmt->bind_param("is", $pageId, $filename);
+        $stmt->execute();
+        return $stmt->affected_rows > 0;
     }
 
     /**
@@ -318,30 +423,40 @@ class PageModule {
             WHERE jt.{$this->spaceCol} = ?
             ORDER BY t.name ASC
         ");
-        if (!$stmt) return [];
+        if (!$stmt) {
+            return [];
+        }
         $stmt->bind_param("i", $spaceId);
         $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        return array_column($stmt->get_result()->fetch_all(MYSQLI_ASSOC), 'name');
+    }
 
     public function addSpaceTags(int $spaceId, array $tags): array {
         foreach ($tags as $rawTag) {
             $tagName = strtolower(trim((string)$rawTag));
-            if ($tagName === '') continue;
+            if ($tagName === '') {
+                continue;
+            }
 
             $stmtIns = $this->conn->prepare("INSERT IGNORE INTO tag (name) VALUES (?)");
-            $stmtIns->bind_param("s", $tagName);
-            $stmtIns->execute();
+            if ($stmtIns) {
+                $stmtIns->bind_param("s", $tagName);
+                $stmtIns->execute();
+            }
 
             $stmtGet = $this->conn->prepare("SELECT ID FROM tag WHERE name = ? LIMIT 1");
-            $stmtGet->bind_param("s", $tagName);
-            $stmtGet->execute();
-            $tagRow = $stmtGet->get_result()->fetch_assoc();
-            if ($tagRow) {
-                $tagId = (int)$tagRow['ID'];
-                $stmtLink = $this->conn->prepare("INSERT IGNORE INTO {$this->tagJoinTable} ({$this->spaceCol}, FORtag) VALUES (?, ?)");
-                $stmtLink->bind_param("ii", $spaceId, $tagId);
-                $stmtLink->execute();
+            if ($stmtGet) {
+                $stmtGet->bind_param("s", $tagName);
+                $stmtGet->execute();
+                $tagRow = $stmtGet->get_result()->fetch_assoc();
+                if ($tagRow) {
+                    $tagId = (int)$tagRow['ID'];
+                    $stmtLink = $this->conn->prepare("INSERT IGNORE INTO {$this->tagJoinTable} ({$this->spaceCol}, FORtag) VALUES (?, ?)");
+                    if ($stmtLink) {
+                        $stmtLink->bind_param("ii", $spaceId, $tagId);
+                        $stmtLink->execute();
+                    }
+                }
             }
         }
         return $this->getSpaceTags($spaceId);
@@ -350,24 +465,21 @@ class PageModule {
     public function removeSpaceTags(int $spaceId, array $tags): array {
         foreach ($tags as $rawTag) {
             $tagName = strtolower(trim((string)$rawTag));
-            if ($tagName === '') continue;
+            if ($tagName === '') {
+                continue;
+            }
 
             $stmtDel = $this->conn->prepare("
                 DELETE jt FROM {$this->tagJoinTable} jt
                 JOIN tag t ON jt.FORtag = t.ID
                 WHERE jt.{$this->spaceCol} = ? AND t.name = ?
             ");
-            $stmtDel->bind_param("is", $spaceId, $tagName);
-            $stmtDel->execute();
+            if ($stmtDel) {
+                $stmtDel->bind_param("is", $spaceId, $tagName);
+                $stmtDel->execute();
+            }
         }
         return $this->getSpaceTags($spaceId);
-    }
-
-    public function setSpaceTags(int $spaceId, array $tags): array {
-        $stmtClear = $this->conn->prepare("DELETE FROM {$this->tagJoinTable} WHERE {$this->spaceCol} = ?");
-        $stmtClear->bind_param("i", $spaceId);
-        $stmtClear->execute();
-        return $this->addSpaceTags($spaceId, $tags);
     }
 
     /**
@@ -390,22 +502,35 @@ class PageModule {
         $stmt = $this->conn->prepare($sql);
         $stmt->bind_param("i", $spaceId);
         $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-        if ($row) {
-            return (int)$row['ID'];
+        $space = $stmt->get_result()->fetch_assoc();
+        if (!$space) {
+            return null;
         }
 
-        $dummyHash = '$2y$10$ierol0lKnAtitBH2SzVLFO5QImS0FYaQmsPZvoBhqjkkel5cWPHl6';
-        $stmtIns = $this->conn->prepare("
-            INSERT INTO `user` (username, email, password_hash, description, FORrole)
-            VALUES ('deleted_user', 'deleted@system.local', ?, 'Borttagen användare', 1)
-        ");
-        $stmtIns->bind_param("s", $dummyHash);
-        $stmtIns->execute();
-        $insertId = (int)$this->conn->insert_id;
-        $stmtIns->close();
-        return $insertId;
+        $space[$idAlias] = (int)$space[$idAlias];
+        $space['tags'] = $this->getSpaceTags($spaceId);
+        return $space;
+    }
+
+    public function canViewSpace(array $space, ?int $viewerId): bool {
+        if ($space['visibility'] !== 'private') {
+            return true;
+        }
+        if ($viewerId === null || $viewerId <= 0) {
+            return false;
+        }
+        if ((int)$space['_owner_id'] === $viewerId || $this->isAdmin($viewerId)) {
+            return true;
+        }
+
+        $spaceId = (int)$space[$this->serviceType . '_id'];
+        $stmtPerm = $this->conn->prepare("SELECT ID FROM {$this->permTable} WHERE {$this->spaceCol} = ? AND FORuser = ?");
+        if (!$stmtPerm) {
+            return false;
+        }
+        $stmtPerm->bind_param("ii", $spaceId, $viewerId);
+        $stmtPerm->execute();
+        return (bool)$stmtPerm->get_result()->fetch_assoc();
     }
 
     public function canEditSpace(int $spaceId, int $userId, bool $requireOwnerOrCoOwner = false): bool {
@@ -427,30 +552,19 @@ class PageModule {
             WHERE up.{$this->spaceCol} = ? AND up.FORuser = ?
             LIMIT 1
         ");
+        if (!$stmt) {
+            return false;
+        }
         $stmt->bind_param("ii", $spaceId, $userId);
         $stmt->execute();
-        $res = (bool)$stmt->get_result()->fetch_assoc();
-        $stmt->close();
-        return $res;
-    }
-
-    public function getUserRole(int $userId): string {
-        $stmtRole = $this->conn->prepare("
-            SELECT r.role_name
-            FROM `user` u
-            JOIN role r ON u.FORrole = r.ID
-            WHERE u.ID = ?
-        ");
-        $stmtRole->bind_param("i", $userId);
-        $stmtRole->execute();
-        $role = $stmtRole->get_result()->fetch_assoc()['role_name'] ?? 'user';
-        $stmtRole->close();
-        return $role;
-    }
-
-    public function isAdmin(int $userId): bool {
-        $role = $this->getUserRole($userId);
-        return $role === 'admin' || $role === 'root_admin';
+        $row = $stmt->get_result()->fetch_assoc();
+        if (!$row) {
+            return false;
+        }
+        if ($requireOwnerOrCoOwner) {
+            return $row['role_name'] === 'co_owner';
+        }
+        return in_array($row['role_name'], ['editor', 'co_owner'], true);
     }
 
     public function canDeleteSpace(int $spaceId, int $userId): bool {
@@ -461,62 +575,391 @@ class PageModule {
         return $space && ((int)$space['_owner_id'] === $userId);
     }
 
-    /**
-     * ========================================================================
-     * SIDBEHÖRIGHETER & ÄGARSKAPSÖVERFÖRING
-     * ========================================================================
-     */
-    public function canModify(int $pageId, int $userId, bool $requireOwnerOrAdmin = false): bool {
-        if ($this->isAdmin($userId)) {
-            return true;
+    public function createSpace(string $title, ?string $description, int $userId, string $visibility = 'public', array $tags = []): array {
+        $normalized = $this->normalizeVisibility($visibility);
+        if ($normalized === null) {
+            throw new InvalidArgumentException('Invalid visibility');
         }
+        $visId = ($normalized === 'private') ? 2 : 1;
+
+        $stmt = $this->conn->prepare("
+            INSERT INTO {$this->spaceTable} (titel, description, FORuser, FORvisability)
+            VALUES (?, ?, ?, ?)
+        ");
+        $stmt->bind_param("ssii", $title, $description, $userId, $visId);
+        $stmt->execute();
+        $spaceId = (int)$this->conn->insert_id;
+
+        if (!empty($tags)) {
+            $this->addSpaceTags($spaceId, $tags);
+        }
+
+        $space = $this->getSpace($spaceId);
+        unset($space['_owner_id']);
+        return $space;
+    }
+
+    public function updateSpace(
+        int $spaceId,
+        ?string $title,
+        ?string $description,
+        ?string $visibility,
+        array $addTags = [],
+        array $removeTags = []
+    ): ?array {
+        $space = $this->getSpace($spaceId);
+        if (!$space) {
+            return null;
+        }
+
+        $newTitle = ($title !== null && trim($title) !== '') ? trim($title) : $space['titel'];
+        $newDesc = $description !== null ? trim($description) : $space['description'];
+        $newVis = $visibility !== null ? $this->normalizeVisibility($visibility) : $space['visibility'];
+        if ($newVis === null) {
+            throw new InvalidArgumentException('Invalid visibility');
+        }
+        $visId = ($newVis === 'private') ? 2 : 1;
+
+        $stmt = $this->conn->prepare("
+            UPDATE {$this->spaceTable}
+            SET titel = ?, description = ?, FORvisability = ?
+            WHERE ID = ?
+        ");
+        $stmt->bind_param("ssii", $newTitle, $newDesc, $visId, $spaceId);
+        $stmt->execute();
+
+        $stmtSub = $this->conn->prepare("UPDATE {$this->subTable} SET FORvisability = ? WHERE {$this->spaceCol} = ?");
+        $stmtSub->bind_param("ii", $visId, $spaceId);
+        $stmtSub->execute();
+
+        if (!empty($addTags)) {
+            $this->addSpaceTags($spaceId, $addTags);
+        }
+        if (!empty($removeTags)) {
+            $this->removeSpaceTags($spaceId, $removeTags);
+        }
+
+        $updated = $this->getSpace($spaceId);
+        unset($updated['_owner_id']);
+        return $updated;
+    }
+
+    public function deleteSpace(int $spaceId): bool {
+        $stmtPages = $this->conn->prepare("SELECT FORpage FROM {$this->subTable} WHERE {$this->spaceCol} = ?");
+        $stmtPages->bind_param("i", $spaceId);
+        $stmtPages->execute();
+        $pages = $stmtPages->get_result()->fetch_all(MYSQLI_ASSOC);
+        foreach ($pages as $pg) {
+            $this->deletePage((int)$pg['FORpage']);
+        }
+
+        $stmtDel = $this->conn->prepare("DELETE FROM {$this->spaceTable} WHERE ID = ?");
+        $stmtDel->bind_param("i", $spaceId);
+        return $stmtDel->execute();
+    }
+
+    public function listSpaces(?int $viewerId, string $search = '', string $sort = 'DESC', ?string $tagFilter = null): array {
+        $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
+        $params = [];
+        $types = '';
+        $idAlias = $this->serviceType . '_id';
 
         $sql = "
-            SELECT p.FORuser, sub.ID AS sub_id
-            FROM page p
-            JOIN " . $this->subTable . " sub ON sub.FORpage = p.ID
-            WHERE p.ID = ?
+            SELECT s.ID AS $idAlias, s.titel, s.description, s.created_at,
+                   u.email AS owner_email, v.state AS visibility
+            FROM {$this->spaceTable} s
+            JOIN `user` u ON s.FORuser = u.ID
+            JOIN visability v ON s.FORvisability = v.ID
+            WHERE 1 = 1
         ";
-        $stmtPage = $this->conn->prepare($sql);
-        $stmtPage->bind_param("i", $pageId);
-        $stmtPage->execute();
-        $page = $stmtPage->get_result()->fetch_assoc();
-        $stmtPage->close();
 
-        if (!$page) {
-            return false;
-        }
-
-        if ((int)$page['FORuser'] === $userId) {
-            return true;
-        }
-
-        if ($requireOwnerOrAdmin) {
-            return false;
-        }
-
-        if ($this->subTable === 'page_wiki') {
-            $wikiId = (int)$page['sub_id'];
-            $stmtEditor = $this->conn->prepare("SELECT ID FROM editor WHERE FORpage_wiki = ? AND FORuser = ?");
-            $stmtEditor->bind_param("ii", $wikiId, $userId);
-            $stmtEditor->execute();
-            $res = (bool)$stmtEditor->get_result()->fetch_assoc();
-            $stmtEditor->close();
-            if ($res) {
-                return true;
+        if (!($viewerId && $this->isAdmin($viewerId))) {
+            if ($viewerId && $viewerId > 0) {
+                $sql .= " AND (
+                    v.state = 'public'
+                    OR s.FORuser = ?
+                    OR EXISTS (SELECT 1 FROM {$this->permTable} up WHERE up.{$this->spaceCol} = s.ID AND up.FORuser = ?)
+                )";
+                $params[] = $viewerId;
+                $params[] = $viewerId;
+                $types .= 'ii';
+            } else {
+                $sql .= " AND v.state = 'public'";
             }
         }
 
-        $stmtPerm = $this->conn->prepare("SELECT ID FROM user_permission_page WHERE FORpage = ? AND FORuser = ?");
-        $stmtPerm->bind_param("ii", $pageId, $userId);
-        $stmtPerm->execute();
-        $res = (bool)$stmtPerm->get_result()->fetch_assoc();
-        $stmtPerm->close();
-        return $res;
+        if ($search !== '') {
+            $sql .= " AND (s.titel LIKE ? OR s.description LIKE ? OR u.email LIKE ?)";
+            $like = '%' . $search . '%';
+            $params[] = $like;
+            $params[] = $like;
+            $params[] = $like;
+            $types .= 'sss';
+        }
+
+        if ($tagFilter !== null && trim($tagFilter) !== '') {
+            $sql .= " AND EXISTS (
+                SELECT 1 FROM {$this->tagJoinTable} jt
+                JOIN tag t ON jt.FORtag = t.ID
+                WHERE jt.{$this->spaceCol} = s.ID AND t.name = ?
+            )";
+            $params[] = strtolower(trim($tagFilter));
+            $types .= 's';
+        }
+
+        $sql .= " ORDER BY s.titel $order, s.created_at DESC";
+
+        $stmt = $this->conn->prepare($sql);
+        if ($params) {
+            $stmt->bind_param($types, ...$params);
+        }
+        $stmt->execute();
+        $spaces = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        foreach ($spaces as &$sp) {
+            $sp[$idAlias] = (int)$sp[$idAlias];
+            $sp['tags'] = $this->getSpaceTags($sp[$idAlias]);
+        }
+        unset($sp);
+        return $spaces;
     }
 
-    public function getPage(int $pageId): ?array {
-        $relationCol = ($this->serviceType === 'blog') ? 'sub.FORblog AS blog_id' : 'sub.FORwiki AS wiki_id';
+    /**
+     * ========================================================================
+     * SPACE PERMISSIONS & OWNERSHIP TRANSFER (WIKI / BLOG LEVEL)
+     * ========================================================================
+     */
+    public function getSpacePermissions(int $spaceId): array {
+        $stmt = $this->conn->prepare("
+            SELECT u.email, perm.role_name AS role
+            FROM {$this->permTable} up
+            JOIN `user` u ON up.FORuser = u.ID
+            JOIN permission perm ON up.FORpermission = perm.ID
+            WHERE up.{$this->spaceCol} = ?
+            ORDER BY perm.role_name ASC, u.email ASC
+        ");
+        if (!$stmt) {
+            return [];
+        }
+        $stmt->bind_param("i", $spaceId);
+        $stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    }
+
+    public function setSpacePermission(int $spaceId, int $targetUserId, string $roleName): void {
+        $stmtPermRole = $this->conn->prepare("INSERT IGNORE INTO permission (role_name) VALUES (?)");
+        $stmtPermRole->bind_param("s", $roleName);
+        $stmtPermRole->execute();
+
+        $stmtGetPerm = $this->conn->prepare("SELECT ID FROM permission WHERE role_name = ? LIMIT 1");
+        $stmtGetPerm->bind_param("s", $roleName);
+        $stmtGetPerm->execute();
+        $permId = (int)$stmtGetPerm->get_result()->fetch_assoc()['ID'];
+
+        $stmtCheck = $this->conn->prepare("SELECT ID FROM {$this->permTable} WHERE {$this->spaceCol} = ? AND FORuser = ?");
+        $stmtCheck->bind_param("ii", $spaceId, $targetUserId);
+        $stmtCheck->execute();
+        $existing = $stmtCheck->get_result()->fetch_assoc();
+
+        if ($existing) {
+            $upId = (int)$existing['ID'];
+            $stmtUpd = $this->conn->prepare("UPDATE {$this->permTable} SET FORpermission = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $permId, $upId);
+            $stmtUpd->execute();
+        } else {
+            $stmtAdd = $this->conn->prepare("
+                INSERT INTO {$this->permTable} ({$this->spaceCol}, FORuser, FORpermission)
+                VALUES (?, ?, ?)
+            ");
+            $stmtAdd->bind_param("iii", $spaceId, $targetUserId, $permId);
+            $stmtAdd->execute();
+        }
+    }
+
+    public function removeSpacePermission(int $spaceId, int $targetUserId): bool {
+        $stmtDel = $this->conn->prepare("DELETE FROM {$this->permTable} WHERE {$this->spaceCol} = ? AND FORuser = ?");
+        $stmtDel->bind_param("ii", $spaceId, $targetUserId);
+        $stmtDel->execute();
+        return $stmtDel->affected_rows > 0;
+    }
+
+    public function transferSpaceOwnership(int $spaceId, int $newOwnerId): bool {
+        $space = $this->getSpace($spaceId);
+        if (!$space) {
+            return false;
+        }
+
+        $this->conn->begin_transaction();
+        try {
+            $stmtUpd = $this->conn->prepare("UPDATE {$this->spaceTable} SET FORuser = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $newOwnerId, $spaceId);
+            $stmtUpd->execute();
+
+            $stmtDelUp = $this->conn->prepare("DELETE FROM {$this->permTable} WHERE {$this->spaceCol} = ? AND FORuser = ?");
+            $stmtDelUp->bind_param("ii", $spaceId, $newOwnerId);
+            $stmtDelUp->execute();
+
+            $this->conn->commit();
+            return true;
+        } catch (Exception $e) {
+            $this->conn->rollback();
+            throw $e;
+        }
+    }
+
+    public function removeSpaceOwnership(int $spaceId): array {
+        $space = $this->getSpace($spaceId);
+        if (!$space) {
+            return ['new_owner_email' => null, 'assigned_via' => 'not_found'];
+        }
+
+        $this->conn->begin_transaction();
+        try {
+            $stmtCo = $this->conn->prepare("
+                SELECT up.FORuser AS co_owner_id, u.email AS co_owner_email
+                FROM {$this->permTable} up
+                JOIN permission perm ON up.FORpermission = perm.ID
+                JOIN `user` u ON up.FORuser = u.ID
+                JOIN role r ON u.FORrole = r.ID
+                WHERE up.{$this->spaceCol} = ?
+                  AND perm.role_name = 'co_owner'
+                  AND u.username <> 'deleted_user'
+                  AND r.role_name <> 'banned'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM service_ban sb
+                      WHERE sb.FORuser = u.ID AND sb.service IN (?, 'all')
+                  )
+                ORDER BY up.ID ASC
+                LIMIT 1
+            ");
+            $coOwner = null;
+            if ($stmtCo) {
+                $stmtCo->bind_param("is", $spaceId, $this->serviceType);
+                $stmtCo->execute();
+                $coOwner = $stmtCo->get_result()->fetch_assoc();
+            }
+
+            if ($coOwner) {
+                $newOwnerId = (int)$coOwner['co_owner_id'];
+                $newOwnerEmail = (string)$coOwner['co_owner_email'];
+
+                $stmtUpd = $this->conn->prepare("UPDATE {$this->spaceTable} SET FORuser = ? WHERE ID = ?");
+                $stmtUpd->bind_param("ii", $newOwnerId, $spaceId);
+                $stmtUpd->execute();
+
+                $stmtDelUp = $this->conn->prepare("DELETE FROM {$this->permTable} WHERE {$this->spaceCol} = ? AND FORuser = ?");
+                $stmtDelUp->bind_param("ii", $spaceId, $newOwnerId);
+                $stmtDelUp->execute();
+
+                $this->conn->commit();
+                return ['new_owner_email' => $newOwnerEmail, 'assigned_via' => 'co_owner'];
+            }
+
+            $deletedUserId = $this->getDeletedUserId();
+            $stmtUpd = $this->conn->prepare("UPDATE {$this->spaceTable} SET FORuser = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $deletedUserId, $spaceId);
+            $stmtUpd->execute();
+
+            $this->conn->commit();
+            return ['new_owner_email' => 'deleted@system.local', 'assigned_via' => 'deleted_user'];
+        } catch (Exception $e) {
+            $this->conn->rollback();
+            throw $e;
+        }
+    }
+
+    public function autoHealSpaceOwner(int $spaceId): void {
+        $stmt = $this->conn->prepare("
+            SELECT s.FORuser, u.username, r.role_name
+            FROM {$this->spaceTable} s
+            JOIN `user` u ON s.FORuser = u.ID
+            JOIN role r ON u.FORrole = r.ID
+            WHERE s.ID = ?
+        ");
+        $stmt->bind_param("i", $spaceId);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+        if (!$row) {
+            return;
+        }
+
+        $ownerId = (int)$row['FORuser'];
+        if ($row['role_name'] === 'banned' || $row['username'] === 'deleted_user' || $this->isBannedFromService($ownerId, $this->serviceType)) {
+            $this->removeSpaceOwnership($spaceId);
+        }
+    }
+
+    public function banUserFromService(int $targetUserId, string $serviceScope = 'wiki'): int {
+        $serviceScope = strtolower(trim($serviceScope));
+        if (!in_array($serviceScope, ['wiki', 'blog', 'all'], true)) {
+            $serviceScope = $this->serviceType;
+        }
+
+        if ($serviceScope === 'all') {
+            $this->conn->query("INSERT IGNORE INTO role (ID, role_name) VALUES (4, 'banned')");
+            $stmtRole = $this->conn->prepare("SELECT ID FROM role WHERE role_name = 'banned' LIMIT 1");
+            $stmtRole->execute();
+            $bannedRoleId = (int)($stmtRole->get_result()->fetch_assoc()['ID'] ?? 4);
+
+            $stmtUpd = $this->conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $bannedRoleId, $targetUserId);
+            $stmtUpd->execute();
+
+            $stmtSess = $this->conn->prepare("DELETE FROM user_session WHERE FORuser = ?");
+            $stmtSess->bind_param("i", $targetUserId);
+            $stmtSess->execute();
+        }
+
+        $stmtBan = $this->conn->prepare("INSERT IGNORE INTO service_ban (FORuser, service) VALUES (?, ?)");
+        if ($stmtBan) {
+            $stmtBan->bind_param("is", $targetUserId, $serviceScope);
+            $stmtBan->execute();
+        }
+
+        $transferred = 0;
+        $servicesToTransfer = ($serviceScope === 'all') ? ['wiki', 'blog'] : [$serviceScope];
+
+        foreach ($servicesToTransfer as $srv) {
+            $mod = ($srv === $this->serviceType) ? $this : new self($this->conn, $srv);
+            $stmtSpaces = $this->conn->prepare("SELECT ID FROM {$srv} WHERE FORuser = ?");
+            if ($stmtSpaces) {
+                $stmtSpaces->bind_param("i", $targetUserId);
+                $stmtSpaces->execute();
+                $rows = $stmtSpaces->get_result()->fetch_all(MYSQLI_ASSOC);
+                foreach ($rows as $r) {
+                    $mod->removeSpaceOwnership((int)$r['ID']);
+                    $transferred++;
+                }
+            }
+        }
+
+        return $transferred;
+    }
+
+    public function unbanUserFromService(int $targetUserId, string $serviceScope = 'wiki'): void {
+        $serviceScope = strtolower(trim($serviceScope));
+        if ($serviceScope === 'all') {
+            $stmtDel = $this->conn->prepare("DELETE FROM service_ban WHERE FORuser = ?");
+            if ($stmtDel) {
+                $stmtDel->bind_param("i", $targetUserId);
+                $stmtDel->execute();
+            }
+
+            $stmtRole = $this->conn->prepare("SELECT ID FROM role WHERE role_name = 'user' LIMIT 1");
+            $stmtRole->execute();
+            $userRoleId = (int)($stmtRole->get_result()->fetch_assoc()['ID'] ?? 1);
+
+            $stmtUpd = $this->conn->prepare("UPDATE `user` SET FORrole = ? WHERE ID = ?");
+            $stmtUpd->bind_param("ii", $userRoleId, $targetUserId);
+            $stmtUpd->execute();
+        } else {
+            $stmtDel = $this->conn->prepare("DELETE FROM service_ban WHERE FORuser = ? AND service = ?");
+            if ($stmtDel) {
+                $stmtDel->bind_param("is", $targetUserId, $serviceScope);
+                $stmtDel->execute();
+            }
+        }
+    }
 
     /**
      * ========================================================================
@@ -526,9 +969,10 @@ class PageModule {
     public function getPage(int $pageId): ?array {
         $spaceIdAlias = $this->serviceType . '_id';
         $sql = "
-            SELECT p.ID AS page_id, p.titel, p.content, p.created_at,
-                   p.FORuser AS owner_id, u.username AS owner_username,
-                   sub.ID AS service_page_id, $relationCol, v.state AS visibility
+            SELECT p.ID AS page_id, sub.{$this->spaceCol} AS $spaceIdAlias,
+                   p.titel, p.content, p.created_at,
+                   u.email AS author_email, owner_u.email AS owner_email,
+                   v.state AS visibility, s.FORuser AS _space_owner_id
             FROM page p
             JOIN `user` u ON p.FORuser = u.ID
             JOIN {$this->subTable} sub ON sub.FORpage = p.ID
@@ -541,7 +985,6 @@ class PageModule {
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
         $page = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
 
         if (!$page) {
             return null;
@@ -558,17 +1001,40 @@ class PageModule {
         return $page;
     }
 
-    public function listPages(?int $viewerId, ?int $parentWikiId = null, string $search = '', string $sort = 'DESC'): array {
+    public function canViewPage(array $page, ?int $viewerId): bool {
+        $spaceId = (int)$page[$this->serviceType . '_id'];
+        $space = $this->getSpace($spaceId);
+        if (!$space) {
+            return false;
+        }
+        return $this->canViewSpace($space, $viewerId);
+    }
+
+    public function canViewPageId(int $pageId, ?int $viewerId): bool {
+        $page = $this->getPage($pageId);
+        return $page ? $this->canViewPage($page, $viewerId) : false;
+    }
+
+    public function canModifyPage(int $pageId, int $userId, bool $requireOwnerOrCoOwner = false): bool {
+        $page = $this->getPage($pageId);
+        if (!$page) {
+            return false;
+        }
+        $spaceId = (int)$page[$this->serviceType . '_id'];
+        return $this->canEditSpace($spaceId, $userId, $requireOwnerOrCoOwner);
+    }
+
+    public function listPages(?int $viewerId, ?int $parentSpaceId = null, string $search = '', string $sort = 'DESC', ?string $tagFilter = null): array {
         $order = strtoupper($sort) === 'ASC' ? 'ASC' : 'DESC';
         $params = [];
         $types = '';
         $spaceIdAlias = $this->serviceType . '_id';
 
-        $relationCol = ($this->serviceType === 'blog') ? 'sub.FORblog AS blog_id' : 'sub.FORwiki AS wiki_id';
-
         $sql = "
-            SELECT p.ID AS page_id, p.titel, p.created_at, p.FORuser AS owner_id,
-                   u.username AS owner_username, $relationCol, v.state AS visibility
+            SELECT p.ID AS page_id, sub.{$this->spaceCol} AS $spaceIdAlias,
+                   p.titel, p.content, p.created_at,
+                   u.email AS author_email, owner_u.email AS owner_email,
+                   v.state AS visibility
             FROM page p
             JOIN `user` u ON p.FORuser = u.ID
             JOIN {$this->subTable} sub ON sub.FORpage = p.ID
@@ -577,6 +1043,27 @@ class PageModule {
             JOIN visability v ON s.FORvisability = v.ID
             WHERE 1 = 1
         ";
+
+        if (!($viewerId !== null && $viewerId > 0 && $this->isAdmin($viewerId))) {
+            if ($viewerId === null || $viewerId <= 0) {
+                $sql .= " AND v.state = 'public'";
+            } else {
+                $sql .= " AND (
+                    v.state = 'public'
+                    OR s.FORuser = ?
+                    OR EXISTS (SELECT 1 FROM {$this->permTable} up WHERE up.{$this->spaceCol} = s.ID AND up.FORuser = ?)
+                )";
+                $params[] = $viewerId;
+                $params[] = $viewerId;
+                $types .= 'ii';
+            }
+        }
+
+        if ($parentSpaceId !== null && $parentSpaceId > 0) {
+            $sql .= " AND sub.{$this->spaceCol} = ?";
+            $params[] = $parentSpaceId;
+            $types .= 'i';
+        }
 
         if ($search !== '') {
             $sql .= " AND (p.titel LIKE ? OR u.email LIKE ? OR owner_u.email LIKE ?)";
@@ -605,7 +1092,6 @@ class PageModule {
         }
         $stmt->execute();
         $pages = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        $stmt->close();
 
         foreach ($pages as &$page) {
             $page['page_id'] = (int)$page['page_id'];
@@ -631,7 +1117,6 @@ class PageModule {
             throw new InvalidArgumentException(ucfirst($this->serviceType) . ' not found');
         }
 
-        // Visibility is inherited from the father space
         $visibilityId = ($space['visibility'] === 'private') ? 2 : 1;
         $plainText = $this->normalizePlainText($content);
         $contentJson = json_encode($plainText, JSON_UNESCAPED_UNICODE);
@@ -642,12 +1127,10 @@ class PageModule {
             $stmtPage->bind_param("ssi", $title, $contentJson, $userId);
             $stmtPage->execute();
             $pageId = (int)$this->conn->insert_id;
-            $stmtPage->close();
 
             $stmtSub = $this->conn->prepare("INSERT INTO {$this->subTable} (FORvisability, FORpage, {$this->spaceCol}) VALUES (?, ?, ?)");
             $stmtSub->bind_param("iii", $visibilityId, $pageId, $spaceId);
             $stmtSub->execute();
-            $stmtSub->close();
 
             if (!empty($pictures)) {
                 $this->savePagePictures($pageId, $userId, $pictures);
@@ -683,26 +1166,43 @@ class PageModule {
             $stmtOld->bind_param("i", $pageId);
             $stmtOld->execute();
             $oldPage = $stmtOld->get_result()->fetch_assoc();
-            $stmtOld->close();
 
             if (!$oldPage) {
                 $this->conn->rollback();
                 return null;
             }
 
+            $removedPicLabel = null;
+            if ($removedPic !== null && trim($removedPic) !== '') {
+                $removedPicLabel = $this->softDeletePictureByIdOrName($pageId, trim($removedPic));
+            }
+
             if (!empty($addedPictures)) {
                 $this->savePagePictures($pageId, $userId, $addedPictures);
             }
 
-            $newTitle = $title ?? $oldPage['titel'];
-            $newContent = ($content !== null)
-                ? json_encode($content, JSON_UNESCAPED_UNICODE)
+            $oldPlainText = $this->normalizePlainText($oldPage['content']);
+            $historyPayload = json_encode([
+                '_page_id' => $pageId,
+                'titel' => $oldPage['titel'],
+                'content' => $oldPlainText
+            ], JSON_UNESCAPED_UNICODE);
+
+            $stmtHist = $this->conn->prepare("
+                INSERT INTO update_history (old_text, removed_pic, FORuser)
+                VALUES (?, ?, ?)
+            ");
+            $stmtHist->bind_param("ssi", $historyPayload, $removedPicLabel, $userId);
+            $stmtHist->execute();
+
+            $newTitle = ($title !== null && trim($title) !== '') ? trim($title) : $oldPage['titel'];
+            $newContentJson = ($content !== null)
+                ? json_encode($this->normalizePlainText($content), JSON_UNESCAPED_UNICODE)
                 : $oldPage['content'];
 
             $stmtUpd = $this->conn->prepare("UPDATE page SET titel = ?, content = ? WHERE ID = ?");
             $stmtUpd->bind_param("ssi", $newTitle, $newContentJson, $pageId);
             $stmtUpd->execute();
-            $stmtUpd->close();
 
             $this->conn->commit();
             $updated = $this->getPage($pageId);
@@ -714,9 +1214,6 @@ class PageModule {
         }
     }
 
-    /**
-     * Rollbacks a page to a specific history entry ID (restores title, plain text content, and soft-deleted image)
-     */
     public function rollbackPageToHistory(int $historyId, int $userId): ?array {
         $stmt = $this->conn->prepare("
             SELECT ID, old_text, removed_pic
@@ -742,13 +1239,11 @@ class PageModule {
             ? $this->normalizePlainText($decoded['content'])
             : $this->normalizePlainText($decoded);
 
-        // Save current state into history and update the page with the restored text
         $updatedPage = $this->updatePage($pageId, $restoredTitle, $restoredText, $userId);
         if (!$updatedPage) {
             return null;
         }
 
-        // If the rolled-back version had a picture that was removed in that edit, restore it from soft-delete
         if (!empty($entry['removed_pic'])) {
             $this->restorePictureByName($pageId, (string)$entry['removed_pic']);
             $updatedPage = $this->getPage($pageId);
@@ -759,16 +1254,13 @@ class PageModule {
     }
 
     public function deletePage(int $pageId): bool {
-        // Soft-delete pictures first so files remain for X days before physical purge
         $stmtPics = $this->conn->prepare("UPDATE picture SET deleted_at = NOW(), FORpage = NULL WHERE FORpage = ? AND deleted_at IS NULL");
         $stmtPics->bind_param("i", $pageId);
         $stmtPics->execute();
 
         $stmtDel = $this->conn->prepare("DELETE FROM page WHERE ID = ?");
         $stmtDel->bind_param("i", $pageId);
-        $ok = $stmtDel->execute();
-        $stmtDel->close();
-        return $ok;
+        return $stmtDel->execute();
     }
 
     /**
@@ -776,26 +1268,19 @@ class PageModule {
      * COMMENTS (EMAIL BASED & PLAIN TEXT)
      * ========================================================================
      */
-    public function getComments(int $pageId, string $sort = 'ASC', ?int $limit = null): array {
+    public function getComments(int $pageId, string $sort = 'ASC'): array {
         $order = strtoupper($sort) === 'DESC' ? 'DESC' : 'ASC';
-        $sql = "
-            SELECT c.ID AS comment_id, c.content, c.created_at, c.last_update,
-                   c.FORuser AS user_id, u.username, c.FORpage AS page_id
+        $stmt = $this->conn->prepare("
+            SELECT c.ID AS comment_id, c.FORpage AS page_id, u.email AS author_email,
+                   c.content, c.created_at, c.last_update
             FROM comment c
             JOIN `user` u ON c.FORuser = u.ID
             WHERE c.FORpage = ?
             ORDER BY c.created_at $order
-        ";
-
-        if ($limit !== null && $limit > 0) {
-            $sql .= " LIMIT " . (int)$limit;
-        }
-
-        $stmt = $this->conn->prepare($sql);
+        ");
         $stmt->bind_param("i", $pageId);
         $stmt->execute();
         $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        $stmt->close();
 
         foreach ($rows as &$row) {
             $row['comment_id'] = (int)$row['comment_id'];
@@ -817,10 +1302,14 @@ class PageModule {
         ");
         $stmt->bind_param("sii", $contentJson, $userId, $pageId);
         $stmt->execute();
-        $insertId = (int)$this->conn->insert_id;
-        $stmt->close();
+        $commentId = (int)$this->conn->insert_id;
 
-        return $insertId;
+        return [
+            'comment_id' => $commentId,
+            'page_id' => $pageId,
+            'author_email' => $this->getEmailById($userId),
+            'content' => $plainText
+        ];
     }
 
     public function canModifyComment(int $commentId, int $userId): bool {
@@ -836,7 +1325,6 @@ class PageModule {
         $stmt->bind_param("i", $commentId);
         $stmt->execute();
         $row = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
 
         if (!$row) {
             return false;
@@ -848,25 +1336,20 @@ class PageModule {
 
         return $this->canModifyPage((int)$row['page_id'], $userId, true);
     }
-public function updateComment(int $commentId, mixed $content): bool {
-        if (!is_array($content)) {
-            $content = ['text' => (string)$content];
-        }
-        $contentJson = json_encode($content, JSON_UNESCAPED_UNICODE);
+
+    public function updateComment(int $commentId, mixed $content): string {
+        $plainText = $this->normalizePlainText($content);
+        $contentJson = json_encode(['text' => $plainText], JSON_UNESCAPED_UNICODE);
 
         $stmt = $this->conn->prepare("UPDATE comment SET content = ? WHERE ID = ?");
         $stmt->bind_param("si", $contentJson, $commentId);
         $stmt->execute();
-        $affected = $stmt->affected_rows >= 0;
-        $stmt->close();
-        return $affected;
+        return $plainText;
     }
 
     public function deleteComment(int $commentId): bool {
         $stmt = $this->conn->prepare("DELETE FROM comment WHERE ID = ?");
         $stmt->bind_param("i", $commentId);
-        $ok = $stmt->execute();
-        $stmt->close();
-        return $ok;
+        return $stmt->execute();
     }
 }

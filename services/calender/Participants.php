@@ -13,12 +13,59 @@ require_once __DIR__ . '/../helpers.php';
 
 // ---------------------------------------------------------------
 // POST (or GET) getParticipants
-// Returns active participants who have accepted invitations.
+// body / params: {
+//      "event_id": 5,                     (optional)
+//      "title": "Meeting",                (optional, used to find event if event_id is omitted)
+//      "creator_email": "admin@test.com"  (optional, used to filter by event creator email)
+// }
+// Returns active participants for the matched event.
 // ---------------------------------------------------------------
 function getParticipants(mysqli $conn): void {
     $data = ($_SERVER['REQUEST_METHOD'] === 'POST') ? getBody() : $_GET;
-    $eventId = resolveEventId($conn, $data);
+    
+    $eventId      = (int)($data['event_id'] ?? 0);
+    $titlePrefix  = trim((string)($data['title'] ?? $data['titel'] ?? ''));
+    $creatorEmail = trim((string)($data['creator_email'] ?? ''));
 
+    // If no ID is given go searching by title and email
+    if ($eventId <= 0 && ($titlePrefix !== '' || $creatorEmail !== '')) {
+        $sqlEvent = 'SELECT e.ID 
+            FROM calender_event e 
+            JOIN page pg ON pg.ID = e.ID 
+            LEFT JOIN user o ON o.ID = pg.FORuser 
+            WHERE 1 = 1';
+        $paramsEvent = [];
+
+        if ($creatorEmail !== '') {
+            $sqlEvent .= ' AND o.email = ?';
+            $paramsEvent[] = $creatorEmail;
+        }
+
+        if ($titlePrefix !== '') {
+            $sqlEvent .= ' AND pg.titel LIKE ?';
+            $paramsEvent[] = $titlePrefix . '%';
+        }
+
+        $sqlEvent .= ' LIMIT 1';
+
+        $eventRow = fetchOne($conn, $sqlEvent, $paramsEvent);
+        if ($eventRow) {
+            $eventId = (int)$eventRow['ID'];
+        } else {
+            respond(404, ['error' => 'Event not found matching title and/or creator email']);
+        }
+    }
+
+    // If no ID, title or email fallback to resolveEventId
+    if ($eventId <= 0 && function_exists('resolveEventId')) {
+        $eventId = resolveEventId($conn, $data);
+    }
+
+    if ($eventId <= 0) {
+        respond(400, ['error' => 'event_id, title, or creator_email is required to identify the event']);
+    }
+
+    //   Get participant from the event
     $rows = fetchAll(
         $conn,
         'SELECT p.ID AS participant_id, u.ID AS user_id, u.username, u.email, u.pfp_file

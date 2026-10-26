@@ -5,11 +5,24 @@ info:
 
 http:
   method: PUT
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=editEvent"
   params:
     - name: action
-      value: ""
+      value: editEvent
       type: query
+  body:
+    type: json
+    data: |-
+      {
+        "event_id": 15,
+        "title": "Uppdaterad Morgonsync",
+        "start_time": "2026-10-25 09:30:00",
+        "end_time": "2026-10-25 10:00:00",
+        "content": {
+          "agenda": "Ny agenda"
+        },
+        "recurrence": null
+      }
   auth: inherit
 
 settings:

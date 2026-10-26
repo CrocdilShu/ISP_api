@@ -5,7 +5,14 @@ info:
 
 http:
   method: GET
-  url: ""
+  url: "{{baseUrl}}user/user.php?action=getUser&email=testuser500@gmail.com"
+  params:
+    - name: action
+      value: getUser
+      type: query
+    - name: email
+      value: testuser500@gmail.com
+      type: query
   auth: inherit
 
 settings:

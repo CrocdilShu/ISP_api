@@ -5,11 +5,14 @@ info:
 
 http:
   method: DELETE
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=getSuggestion"
   params:
     - name: action
-      value: ""
+      value: getSuggestion
       type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

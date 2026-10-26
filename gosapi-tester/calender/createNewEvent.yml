@@ -5,14 +5,29 @@ info:
 
 http:
   method: POST
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=createNewEvent"
   params:
     - name: action
-      value: ""
+      value: createNewEvent
       type: query
   body:
     type: json
-    data: ""
+    data: |-
+      {
+        "title": "Morgonsync",
+        "content": {
+          "agenda": "Planera dagen",
+          "location": "Rum A"
+        },
+        "start_time": "2026-10-25 09:00:00",
+        "end_time": "2026-10-25 09:30:00",
+        "recurrence": {
+          "frequency": "daily",
+          "interval_step": 1,
+          "end_date": "2026-11-01"
+        },
+        "participants": [3, "bob@test.com"]
+      }
   auth: inherit
 
 settings:

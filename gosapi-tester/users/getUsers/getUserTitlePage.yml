@@ -5,7 +5,17 @@ info:
 
 http:
   method: GET
-  url: ""
+  url: "{{baseUrl}}user/user.php?action=getUser&page_type=blog&title=Load Test Page 0621"
+  params:
+    - name: action
+      value: getUser
+      type: query
+    - name: page_type
+      value: blog
+      type: query
+    - name: title
+      value: Load Test Page 0621
+      type: query
   auth: inherit
 
 settings:

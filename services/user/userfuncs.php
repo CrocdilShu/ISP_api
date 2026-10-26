@@ -271,7 +271,6 @@ function createNewUser(mysqli $conn): void {
             respond(400, ['error' => $e->getMessage()]);
         }
     } elseif (array_key_exists('pfp_file', $body) && !empty($body['pfp_file'])) {
-        // Allows passing a direct string path/url if not uploading a raw file
         $pfpFile = cleanText255($body['pfp_file'], 'pfp_file');
     }
 
@@ -281,7 +280,7 @@ function createNewUser(mysqli $conn): void {
     $firstUser = (int)fetchOne($conn, 'SELECT COUNT(*) AS n FROM user')['n'] === 0;
 
     if ($firstUser) {
-        // Nobody exists yet who could act as admin: the first user becomes root_admin
+        // Nobody exists yet: the very first user automatically becomes root_admin
         $role = fetchOne($conn, "SELECT ID, role_name FROM role WHERE role_name = 'root_admin'");
         if (!$role) {
             respond(500, ['error' => 'The role root_admin is missing in the database role table']);
@@ -296,9 +295,27 @@ function createNewUser(mysqli $conn): void {
         if (!$role) {
             respond(400, ['error' => 'Unknown role ID']);
         }
-        // you can only hand out roles up to your own
+
+        // Prevent admins from creating/assigning the root_admin role
+        if ($role['role_name'] === 'root_admin') {
+            respond(403, ['error' => 'A root_admin cannot create another root_admin']);
+        }
+
+        // You can only hand out roles up to your own aka user and admin but now root_admin
         if (roleLevel($role['role_name']) > roleLevel($acting['role_name'])) {
             respond(403, ['error' => 'You cannot assign a role higher than your own']);
+        }
+    }
+
+    // Strict system-wide check: Ensure only 1 root_admin can ever exist
+    if ($role['role_name'] === 'root_admin') {
+        $existingRoot = fetchOne(
+            $conn, 
+            'SELECT u.ID FROM user u JOIN role r ON u.FORrole = r.ID WHERE r.role_name = ?', 
+            ['root_admin']
+        );
+        if ($existingRoot) {
+            respond(403, ['error' => 'A root_admin already exists in the system']);
         }
     }
 

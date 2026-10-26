@@ -31,16 +31,20 @@ switch ($action) {
         exit;
 }
 
-// For all other actions, check authentication/service access first
-$accountId = null;
-
 // Get valid token OR trigger the auto login
 $sessionKey = getCompanySessionKey($conn);
 
-// Validate against provider
-if (!hasServiceAccess($sessionKey, SERVICE_CALENDAR, $accountId)) {
-    respond(403, ['error' => 'Automated company session authentication failed.']);
+// Verify directly with provider without forcing a specific service bit like calendar
+$sessionData = verifySessionWithProvider($sessionKey);
+if (!$sessionData) {
+    // Try refreshing via auto-login if the token expired
+    $sessionKey = getCompanySessionKey($conn);
+    $sessionData = verifySessionWithProvider($sessionKey);
+    if (!$sessionData) {
+        respond(403, ['error' => 'Automated company session authentication failed.']);
+    }
 }
+$accountId = isset($sessionData['user_id']) ? (int)$sessionData['user_id'] : null;
 
 // Handle protected actions
 switch ($action) {

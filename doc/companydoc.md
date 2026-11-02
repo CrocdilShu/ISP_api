@@ -59,8 +59,8 @@ Uppdaterar användarnamn och/eller lösenord för ett befintligt företagskonto.
 #### Request Body
 ```json
 {
-  "company_id": 1,
-  "username": "username_nytt",
+  "username": "username",
+  "new_username": "username_nytt",
   "password": "nytt_lösenord"
 }
 ```

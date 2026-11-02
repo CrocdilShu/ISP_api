@@ -59,9 +59,8 @@ Uppdaterar användarnamn och/eller lösenord för ett befintligt företagskonto.
 #### Request Body
 ```json
 {
-  "username": "username",
-  "new_username": "username_nytt",
-  "password": "nytt_lösenord"
+  "new_username": "gos_new",
+  "password": "new_secure_password"
 }
 ```
 
@@ -78,7 +77,7 @@ Uppdaterar användarnamn och/eller lösenord för ett befintligt företagskonto.
 
 ### `changeCompany`
 
-Växlar det aktiva systemomfattande företags-ID:t (`COMPANY_ID`) genom att slå upp kontot via användarnamnet och uppdatera konfigurationsfilen (`current_company.json`). Ingen session används.
+Växlar det aktiva systemomfattande företags-ID:t (`COMPANY_ID`)
 
 * **Metod:** `POST`
 * **Query Parameter:** `action=changeCompany`

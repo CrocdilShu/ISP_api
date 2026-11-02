@@ -47,35 +47,61 @@ function addCompany(mysqli $conn): void {
 
 // ---------------------------------------------------------------
 // PUT / POST editCompany
-// Edits an existing root_user's username and/or password.
+// Edits the currently active root_user's username and/or password.
 // ---------------------------------------------------------------
 function editCompany(mysqli $conn): void {
     requireMethod('PUT', 'POST');
 
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
-    $username    = trim((string)($input['username'] ?? ''));
+    
+    // Instead of trusting the input username blindly, use the currently active company username
+    $activeUsername = defined('COMPANY_USERNAME') ? COMPANY_USERNAME : '';
+    if ($activeUsername === '') {
+        respond(500, ['error' => 'Active company username is not defined.']);
+    }
+
     $newUsername = trim((string)($input['new_username'] ?? ''));
     $password    = (string)($input['password'] ?? '');
 
-    if ($username === '') respond(400, ['error' => 'username is required']);
-    if (!fetchOne($conn, 'SELECT 1 FROM root_user WHERE username = ?', [$username])) {
-        respond(404, ['error' => 'Company not found']);
+    // Ensure the active company exists in the database
+    if (!fetchOne($conn, 'SELECT 1 FROM root_user WHERE username = ?', [$activeUsername])) {
+        respond(404, ['error' => 'Active company not found in database']);
     }
 
     $updates = []; $params = [];
-    if ($newUsername !== '') {
+    
+    if ($newUsername !== '' && $newUsername !== $activeUsername) {
+        // Check if the new username is already taken by someone else
         if (fetchOne($conn, 'SELECT 1 FROM root_user WHERE username = ?', [$newUsername])) {
             respond(409, ['error' => 'Username is already taken by another company']);
         }
-        $updates[] = 'username = ?'; $params[] = $newUsername;
+        $updates[] = 'username = ?'; 
+        $params[] = $newUsername;
     }
-    if ($password !== '') {
-        $updates[] = 'password_hash = ?'; $params[] = password_hash($password, PASSWORD_DEFAULT);
-    }
-    if (!$updates) respond(400, ['error' => 'No fields provided to update']);
 
-    $params[] = $username;
+    if ($password !== '') {
+        $updates[] = 'password_hash = ?'; 
+        $params[] = password_hash($password, PASSWORD_DEFAULT);
+    }
+
+    if (!$updates) {
+        respond(400, ['error' => 'No fields provided to update']);
+    }
+
+    $params[] = $activeUsername;
     run($conn, 'UPDATE root_user SET ' . implode(', ', $updates) . ' WHERE username = ?', $params);
+
+    // If the username changed, update the active configuration JSON file automatically!
+    if ($newUsername !== '' && $newUsername !== $activeUsername) {
+        $configFile = __DIR__ . '/../../config/current_company.json';
+        if (file_exists($configFile)) {
+            $configData = json_decode(file_get_contents($configFile), true) ?? [];
+            $configData['username'] = $newUsername;
+            $configData['updated_at'] = date('Y-m-d H:i:s');
+            file_put_contents($configFile, json_encode($configData, JSON_PRETTY_PRINT));
+        }
+    }
+
     respond(200, ['success' => true, 'message' => 'Company updated successfully']);
 }
 

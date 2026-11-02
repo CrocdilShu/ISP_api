@@ -48,11 +48,7 @@ function loadSuggestion(mysqli $conn, int $suggestionId): array {
 }
 
 // ---------------------------------------------------------------
-// GET getSuggestions  ?event_id=1  (or ?title=...&creator_email=...)
-// oldest first
-// ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// GET getSuggestions  ?event_id=1  (or ?title=...&creator_email=...)
+// GET getSuggestions  ?event_id=1&start_id=0&limit=100  (or ?title=...&creator_email=...)
 // oldest first
 // ---------------------------------------------------------------
 function getSuggestions(mysqli $conn): void {
@@ -61,6 +57,13 @@ function getSuggestions(mysqli $conn): void {
     $eventId      = (int)($_GET['event_id'] ?? 0);
     $titlePrefix  = trim((string)($_GET['title'] ?? $_GET['titel'] ?? ''));
     $creatorEmail = trim((string)($_GET['creator_email'] ?? ''));
+
+    // Pagination parameters
+    $startId = (int)($_GET['start_id'] ?? 0);
+    $limit   = isset($_GET['limit']) ? (int)$_GET['limit'] : 100;
+    if ($limit <= 0) {
+        $limit = 100;
+    }
 
     // Om event_id saknas men titel eller creator_email anges, leta upp eventet först
     if ($eventId <= 0 && ($titlePrefix !== '' || $creatorEmail !== '')) {
@@ -100,14 +103,16 @@ function getSuggestions(mysqli $conn): void {
         respond(400, ['error' => 'event_id, title, or creator_email is required to identify the event']);
     }
 
+    // Fetch suggestions with start_id clamping and limit
     $rows = fetchAll($conn,
         'SELECT c.ID AS suggestion_id, c.content, c.created_at, c.last_update,
                 c.FORuser AS user_id, u.username, u.pfp_file
             FROM comment c
             LEFT JOIN user u ON u.ID = c.FORuser
-            WHERE c.FORpage = ?
-            ORDER BY c.created_at ASC, c.ID ASC',
-        [$eventId]
+            WHERE c.FORpage = ? AND c.ID >= ?
+            ORDER BY c.created_at ASC, c.ID ASC
+            LIMIT ?',
+        [$eventId, $startId, $limit]
     );
 
     foreach ($rows as &$row) {
@@ -117,7 +122,13 @@ function getSuggestions(mysqli $conn): void {
     }
     unset($row);
 
-    respond(200, ['suggestions' => $rows]);
+    respond(200, [
+        'event_id'    => $eventId,
+        'start_id'    => $startId,
+        'limit'       => $limit,
+        'count'       => count($rows),
+        'suggestions' => $rows
+    ]);
 }
 
 // ---------------------------------------------------------------

@@ -16,9 +16,11 @@ require_once __DIR__ . '/../helpers.php';
 // body / params: {
 //      "event_id": 5,                     (optional)
 //      "title": "Meeting",                (optional, used to find event if event_id is omitted)
-//      "creator_email": "admin@test.com"  (optional, used to filter by event creator email)
+//      "creator_email": "admin@test.com", (optional, used to filter by event creator email)
+//      "start_id": 0,                     (optional, minimum participant/user ID to start from, defaults to 0)
+//      "limit": 100                       (optional, maximum number of participants to return, defaults to 100)
 // }
-// Returns active participants for the matched event.
+// Returns active participants for the matched event with pagination metadata.
 // ---------------------------------------------------------------
 function getParticipants(mysqli $conn): void {
     $data = ($_SERVER['REQUEST_METHOD'] === 'POST') ? getBody() : $_GET;
@@ -26,6 +28,13 @@ function getParticipants(mysqli $conn): void {
     $eventId      = (int)($data['event_id'] ?? 0);
     $titlePrefix  = trim((string)($data['title'] ?? $data['titel'] ?? ''));
     $creatorEmail = trim((string)($data['creator_email'] ?? ''));
+    
+    // Pagination parameters
+    $startId = (int)($data['start_id'] ?? 0);
+    $limit   = isset($data['limit']) ? (int)$data['limit'] : 100;
+    if ($limit <= 0) {
+        $limit = 100;
+    }
 
     // If no ID is given go searching by title and email
     if ($eventId <= 0 && ($titlePrefix !== '' || $creatorEmail !== '')) {
@@ -64,6 +73,25 @@ function getParticipants(mysqli $conn): void {
     if ($eventId <= 0) {
         respond(400, ['error' => 'event_id, title, or creator_email is required to identify the event']);
     }
+
+    // Fetch participants with start_id clamping and limit
+    $sqlParticipants = 'SELECT u.ID, u.username, u.email, p.created_at as participant_since
+        FROM participant p
+        JOIN user u ON u.ID = p.FORuser
+        WHERE p.FORcalender_event = ? AND u.ID >= ?
+        ORDER BY u.ID ASC
+        LIMIT ?';
+
+    $participants = fetchAll($conn, $sqlParticipants, [$eventId, $startId, $limit]);
+
+    respond(200, [
+        'event_id' => $eventId,
+        'start_id' => $startId,
+        'limit'    => $limit,
+        'count'    => count($participants),
+        'participants' => $participants
+    ]);
+}
 
     //   Get participant from the event
     $rows = fetchAll(

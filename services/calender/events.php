@@ -10,16 +10,14 @@ if (!defined('CALENDER_API')) {
 // ---------------------------------------------------------------
 // POST getEvents
 // {
-//      "from": "Y-m-d H:i:s",      (optional, filters events starting/active from this date)
-//      "to": "Y-m-d H:i:s",        (optional, filters events up to this date)
-//      "user_id": 5,               (optional, only events that this user takes part in)
-//      "email": "user@test.com",   (optional, alternative to user_id to look up user events by email)
-//      "start_id": 0,              (optional, minimum event ID to start from, defaults to 0)
-//      "limit": 100                (optional, maximum number of events to return, defaults to 100)
+//      "from": "Y-m-d H:i:s",       (optional, filters events starting/active from this date)
+//      "to": "Y-m-d H:i:s",         (optional, filters events up to this date)
+//      "user_id": 5,                (optional, only events that this user takes part in)
+//      "email": "user@test.com",    (optional, alternative to user_id to look up user events by email)
+//      "start_id": 500,             (optional, minimum event ID to start from, defaults to 0)
+//      "limit": 10                  (optional, maximum number of events to return, defaults to 100)
 // }
-// returns JSON with metadata (start_id, limit, count) and a list of events.
-// Repeating events are returned ONCE (first occurrence + rule),
-// the client expands the repeats.
+// returns JSON with metadata and a list of events.
 // ---------------------------------------------------------------
 function getEvents(mysqli $conn): void {
     requireMethod('POST');
@@ -43,8 +41,9 @@ function getEvents(mysqli $conn): void {
     $from    = $input['from'] ?? null;
     $to      = $input['to'] ?? null;
     $startId = (int)($input['start_id'] ?? 0);
-    $limit   = (int)($input['limit'] ?? 100);
-
+    
+    // Handle limit: defaults to 100 if missing or invalid (<= 0)
+    $limit   = isset($input['limit']) ? (int)$input['limit'] : 100;
     if ($limit <= 0) {
         $limit = 100;
     }
@@ -86,7 +85,7 @@ function getEvents(mysqli $conn): void {
     }
     unset($ev);
 
-    respond(200, [
+    respond(250, [ // (or 200)
         'start_id' => $startId,
         'limit'    => $limit,
         'count'    => count($events),

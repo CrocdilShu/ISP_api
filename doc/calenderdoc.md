@@ -12,7 +12,6 @@ För att göra anrop mot kalender-API:et krävs två olika tokens:
 
 | Header | Beskrivning |
 | :--- | :--- |
-| `X-Session-Key` | **Företagstoken** från leverantören. Verifierar att företaget har behörighet till kalendertjänsten (`SERVICE_CALENDAR`). |
 | `X-User-Token` | **Användartoken** (utfärdad vid `loginUser`). Identifierar den inloggade medarbetaren som utför handlingen. |
 
 > **Identifiering av händelser:** I alla anrop som kräver en specifik händelse kan du skicka antingen `event_id` **ELLER** en kombination av `title` och `creator_email`.
@@ -43,14 +42,17 @@ För att göra anrop mot kalender-API:et krävs två olika tokens:
 ## 1. Händelser (Events)
 
 ### `getEvents`
-Hämtar alla kalenderhändelser för företaget. Kan filtreras per användare eller tidsintervall. Återkommande händelser returneras en gång tillsammans med sin upprepningsregel.
+Hämtar kalenderhändelser för företaget med stöd för paginering (`start_id` och `limit`). Kan även filtreras per användare, e-post eller tidsintervall. Återkommande händelser returneras en gång tillsammans med sin upprepningsregel.
 
 * **Metod:** `POST`
 * **Query Parameter:** `action=getEvents`
 * **Request Body (valfri):**
 ```json
 {
+  "start_id": 0,
+  "limit": 100,
   "user_id": 5,
+  "email": "user@test.com",
   "from": "2026-10-01 00:00:00",
   "to": "2026-10-31 23:59:59"
 }
@@ -59,6 +61,9 @@ Hämtar alla kalenderhändelser för företaget. Kan filtreras per användare el
 * **Svar (200 OK):**
 ```json
 {
+  "start_id": 0,
+  "limit": 100,
+  "count": 1,
   "events": [
     {
       "ID": 12,
@@ -168,27 +173,32 @@ Tar bort en kalenderhändelse. Kan utföras av händelsens ägare eller av en ad
 ## 2. Deltagare & Inbjudningar
 
 ### `getParticipants`
-Hämtar alla aktiva deltagare som har accepterat inbjudan till en händelse.
+Hämtar alla aktiva deltagare som har accepterat inbjudan till en händelse med stöd för paginering (`start_id` och `limit`).
 
 * **Metod:** `POST` eller `GET`
 * **Query Parameter:** `action=getParticipants`
 * **Request Body / Query Params:**
 ```json
 {
-  "event_id": 12
+  "event_id": 12,
+  "start_id": 0,
+  "limit": 100
 }
 ```
 
 * **Svar (200 OK):**
 ```json
 {
+  "event_id": 12,
+  "start_id": 0,
+  "limit": 100,
+  "count": 1,
   "participants": [
     {
-      "participant_id": 1,
-      "user_id": 2,
+      "ID": 2,
       "username": "alice",
       "email": "alice@test.com",
-      "pfp_file": "img/alice.png"
+      "participant_since": "2026-10-15 08:30:00"
     }
   ]
 }
@@ -300,14 +310,18 @@ Skriver över hela deltagarlistan för en händelse direkt utan inbjudan. Endast
 Förslag sparas i kommentarstabellen kopplad till händelsen.
 
 ### `getSuggestions`
-Hämtar alla förslag/kommentarer för en viss händelse i kronologisk ordning.
+Hämtar alla förslag/kommentarer för en viss händelse i kronologisk ordning med stöd för paginering (`start_id` och `limit`).
 
 * **Metod:** `GET`
-* **Query Parameter:** `action=getSuggestions&event_id=12`
+* **Query Parameter:** `action=getSuggestions&event_id=12&start_id=0&limit=100`
 
 * **Svar (200 OK):**
 ```json
 {
+  "event_id": 12,
+  "start_id": 0,
+  "limit": 100,
+  "count": 1,
   "suggestions": [
     {
       "suggestion_id": 3,

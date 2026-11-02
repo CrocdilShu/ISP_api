@@ -51,7 +51,6 @@ switch ($action) {
     case 'createNewUser':   createNewUser($conn);   break;
     case 'editUser':        editUser($conn);        break;
     case 'deleteUser':      deleteUser($conn);      break;
-    case 'rootLogin':       rootLogin($conn);       break;
 
     default:
         respond(404, ['error' => 'unknown action']);

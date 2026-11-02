@@ -17,7 +17,7 @@ require_once __DIR__ . '/../helpers.php';
 //      "event_id": 5,                     (optional)
 //      "title": "Meeting",                (optional, used to find event if event_id is omitted)
 //      "creator_email": "admin@test.com", (optional, used to filter by event creator email)
-//      "start_id": 0,                     (optional, minimum participant/user ID to start from, defaults to 0)
+//      "start_id": 0,                     (optional, minimum user ID to start from, defaults to 0)
 //      "limit": 100                       (optional, maximum number of participants to return, defaults to 100)
 // }
 // Returns active participants for the matched event with pagination metadata.
@@ -74,8 +74,8 @@ function getParticipants(mysqli $conn): void {
         respond(400, ['error' => 'event_id, title, or creator_email is required to identify the event']);
     }
 
-    // Fetch participants with start_id clamping and limit
-    $sqlParticipants = 'SELECT u.ID, u.username, u.email, p.created_at as participant_since
+    // Fetch participants safely without referencing p.created_at
+    $sqlParticipants = 'SELECT u.ID AS user_id, u.username, u.email, u.pfp_file
         FROM participant p
         JOIN user u ON u.ID = p.FORuser
         WHERE p.FORcalender_event = ? AND u.ID >= ?
@@ -85,24 +85,12 @@ function getParticipants(mysqli $conn): void {
     $participants = fetchAll($conn, $sqlParticipants, [$eventId, $startId, $limit]);
 
     respond(200, [
-        'event_id' => $eventId,
-        'start_id' => $startId,
-        'limit'    => $limit,
-        'count'    => count($participants),
+        'event_id'     => $eventId,
+        'start_id'     => $startId,
+        'limit'        => $limit,
+        'count'        => count($participants),
         'participants' => $participants
     ]);
-
-    //   Get participant from the event
-    $rows = fetchAll(
-        $conn,
-        'SELECT p.ID AS participant_id, u.ID AS user_id, u.username, u.email, u.pfp_file
-            FROM participant p
-            LEFT JOIN user u ON u.ID = p.FORuser
-            WHERE p.FORcalender_event = ?',
-        [$eventId]
-    );
-    
-    respond(200, ['participants' => $rows]);
 }
 
 // ---------------------------------------------------------------

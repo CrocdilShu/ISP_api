@@ -1,16 +1,33 @@
 <?php
-//To define what company is in use using a json file
-$activeCompanyId = 1; // Standard-fallback
-$configFile = __DIR__ . '/current_company.json';
+$activeCompanyId = null;
+$activeUsername  = null;
+$configFile      = __DIR__ . '/current_company.json';
 
-if (file_exists($configFile)) {
-    $configData = json_decode(file_get_contents($configFile), true);
-    if (!empty($configData['company_id'])) {
-        $activeCompanyId = (int)$configData['company_id'];
-    }
+// 1. Check if the config file exists
+if (!file_exists($configFile)) {
+    throw new RuntimeException("Configuration file not found: {$configFile}");
 }
 
-define('COMPANY_ID', $activeCompanyId);
+// 2. Read and decode the JSON file
+$configData = json_decode(file_get_contents($configFile), true);
+
+if (json_last_error() !== JSON_ERROR_NONE) {
+    throw new RuntimeException("Invalid JSON in configuration file: " . json_last_error_msg());
+}
+
+// 3. Handle missing username error instead of falling back
+if (empty($configData['username'])) {
+    throw new RuntimeException("Required configuration key 'username' is missing or empty.");
+}
+
+$activeUsername = (string)$configData['username'];
+
+if (!empty($configData['company_id'])) {
+    $activeCompanyId = (int)$configData['company_id'];
+}
+
+define('COMPANY_USERNAME', $activeUsername);
+define('COMPANY_ID', $activeCompanyId);   // can be null until the first provider login
 
 // Go up one directory from __DIR__ to find the .env file in the parent folder
 $envPath = dirname(__DIR__) . '/.env';

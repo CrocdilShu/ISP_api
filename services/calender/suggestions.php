@@ -149,7 +149,7 @@ function editSuggestion(mysqli $conn): void {
     requireMethod('POST', 'PUT');
 
     // 1. Ensure the user is authenticated
-    requireActingUser($conn);
+    $actingId = requireActingUser($conn);
 
     // 2. Parse request body
     $body = getBody();
@@ -163,8 +163,8 @@ function editSuggestion(mysqli $conn): void {
 
     // 3. Load suggestion and check event match
     $suggestion = loadSuggestion($conn, $suggestionId);
-    if ((int)$suggestion['FORpage'] !== $eventId) {
-        respond(404, ['error' => 'Suggestion not found for the specified event']);
+    if ((int)$suggestion['FORuser'] !== $actingId) {
+        respond(403, ['error' => 'Only the author can edit a suggestion']);
     }
 
     run(

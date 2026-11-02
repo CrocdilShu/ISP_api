@@ -17,7 +17,7 @@ config:
 request:
   auth:
     type: bearer
-    token: "{{X-User-Token}}"
+    token: "{{X_User_Token}}"
   variables:
     - name: baseUrl
       value: https://gosapi.ddev.site:8443/services/wiki/

@@ -4,4 +4,6 @@ info:
   seq: 6
 
 request:
-  auth: inherit
+  headers:
+    - name: X-User-Token
+      value: "{{X_User_Token}}"

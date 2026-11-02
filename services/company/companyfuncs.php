@@ -33,7 +33,7 @@ function addCompany(mysqli $conn): void {
     $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
     // Insert into root_user without explicit ID (ID gets set/synced upon provider login)
-    $stmt = $conn->prepare('INSERT INTO root_user (username, password) VALUES (?, ?)');
+    $stmt = $conn->prepare('INSERT INTO root_user (username, password_hash) VALUES (?, ?)');
     $stmt->bind_param('ss', $username, $hashedPassword);
     $stmt->execute();
     $stmt->close();
@@ -53,61 +53,30 @@ function editCompany(mysqli $conn): void {
     requireMethod('PUT', 'POST');
 
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
-    $companyId = (int)($input['company_id'] ?? $input['id'] ?? 0);
-    $username = trim((string)($input['username'] ?? ''));
-    $password = (string)($input['password'] ?? '');
+    $username    = trim((string)($input['username'] ?? ''));
+    $newUsername = trim((string)($input['new_username'] ?? ''));
+    $password    = (string)($input['password'] ?? '');
 
-    if ($companyId <= 0) {
-        respond(400, ['error' => 'Valid company_id or id is required']);
-    }
-
-    // Verify company/root_user exists
-    $company = fetchOne($conn, 'SELECT ID FROM root_user WHERE ID = ?', [$companyId]);
-    if (!$company) {
+    if ($username === '') respond(400, ['error' => 'username is required']);
+    if (!fetchOne($conn, 'SELECT 1 FROM root_user WHERE username = ?', [$username])) {
         respond(404, ['error' => 'Company not found']);
     }
 
-    $updates = [];
-    $params = [];
-    $types = '';
-
-    if ($username !== '') {
-        // Check uniqueness if username is changing
-        $existing = fetchOne($conn, 'SELECT ID FROM root_user WHERE username = ? AND ID != ?', [$username, $companyId]);
-        if ($existing) {
+    $updates = []; $params = [];
+    if ($newUsername !== '') {
+        if (fetchOne($conn, 'SELECT 1 FROM root_user WHERE username = ?', [$newUsername])) {
             respond(409, ['error' => 'Username is already taken by another company']);
         }
-        $updates[] = 'username = ?';
-        $params[] = $username;
-        $types .= 's';
+        $updates[] = 'username = ?'; $params[] = $newUsername;
     }
-
     if ($password !== '') {
-        // Hash new password if provided
-        $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-        $updates[] = 'password = ?';
-        $params[] = $hashedPassword;
-        $types .= 's';
+        $updates[] = 'password_hash = ?'; $params[] = password_hash($password, PASSWORD_DEFAULT);
     }
+    if (!$updates) respond(400, ['error' => 'No fields provided to update']);
 
-    if (empty($updates)) {
-        respond(400, ['error' => 'No fields provided to update']);
-    }
-
-    $params[] = $companyId;
-    $types .= 'i';
-
-    $sql = 'UPDATE root_user SET ' . implode(', ', $updates) . ' WHERE ID = ?';
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param($types, ...$params);
-    $stmt->execute();
-    $stmt->close();
-
-    respond(200, [
-        'success'    => true,
-        'company_id' => $companyId,
-        'message'    => 'Company updated successfully'
-    ]);
+    $params[] = $username;
+    run($conn, 'UPDATE root_user SET ' . implode(', ', $updates) . ' WHERE username = ?', $params);
+    respond(200, ['success' => true, 'message' => 'Company updated successfully']);
 }
 
 // ---------------------------------------------------------------
@@ -119,35 +88,29 @@ function changeCompany(mysqli $conn): void {
 
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
     $username = trim((string)($input['username'] ?? ''));
-
     if ($username === '') {
         respond(400, ['error' => 'Username is required to change company']);
     }
 
-    // Find company based on username in root_user
     $company = fetchOne($conn, 'SELECT ID, username FROM root_user WHERE username = ?', [$username]);
     if (!$company) {
         respond(404, ['error' => 'Company not found for the given username']);
     }
 
-    $companyId = (int)$company['ID'];
-
-    // Save the new ID in the json
     $configFile = __DIR__ . '/../../config/current_company.json';
     $configData = [
-        'company_id' => $companyId,
+        'company_id' => $company['ID'] !== null ? (int)$company['ID'] : null,
         'username'   => $company['username'],
         'updated_at' => date('Y-m-d H:i:s')
     ];
-
     if (file_put_contents($configFile, json_encode($configData, JSON_PRETTY_PRINT)) === false) {
         respond(500, ['error' => 'Failed to update active company configuration']);
     }
 
     respond(200, [
         'success'    => true,
-        'message'    => 'Active COMPANY_ID updated successfully',
-        'company_id' => $companyId,
+        'message'    => 'Active company updated. Session key is fetched on the next call if needed.',
+        'company_id' => $configData['company_id'],
         'username'   => $company['username']
     ]);
 }

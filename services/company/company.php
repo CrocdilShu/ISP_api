@@ -1,5 +1,6 @@
 <?php
-define('COMPANY_API', true); // lets the part files know they are loaded through this file
+define('COMPANY_API', true);
+define('USER_API', true); // lets the part files know they are loaded through this file
 
 require_once __DIR__ . '/../../config/db.php';
 require_once __DIR__ . '/../../config/providerauth.php';

@@ -161,79 +161,55 @@ function hasServiceAccess(?string $sessionKey, int $requiredServiceBit, ?int &$u
 }
 
 function getCompanySessionKey(mysqli $conn): ?string {
-    $companyId = defined('COMPANY_ID') ? COMPANY_ID : NULL; 
+    $username = defined('COMPANY_USERNAME') ? COMPANY_USERNAME : '';
+    if ($username === '') { error_log('GCSK: no COMPANY_USERNAME'); return null; }
 
-    // If a valid, non-expired token already exists in the database
-    $stmt = $conn->prepare(
-        "SELECT token FROM root_user WHERE ID = ? AND expire_date > NOW() LIMIT 1"
+    // 1. A valid stored token?
+    $row = fetchOne(
+        $conn,
+        'SELECT token FROM root_user WHERE username = ? AND token IS NOT NULL AND expire_date > NOW() LIMIT 1',
+        [$username]
     );
-    $stmt->bind_param("i", $companyId);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    if ($row) return $row['token'];
 
-    // If a valid token exists, return it immediately
-    if (!empty($row['token'])) {
-        return $row['token'];
-    }
-
-    // Token is missing or expired we build the username dynamically e.g., 'gos_' + COMPANY_ID (e.g. gos_1, gos_2, etc.) and fetch the shared password from .env
-    $userPrefix = $_ENV['PROVIDER_API_USER'] ?? $_SERVER['PROVIDER_API_USER'] ?? 'gos_';
-    $username = $userPrefix . $companyId;
+    // 2. No/expired token: log in at the provider
     $password = $_ENV['PROVIDER_API_PASS'] ?? $_SERVER['PROVIDER_API_PASS'] ?? '';
+    if ($password === '') { error_log('GCSK: PROVIDER_API_PASS empty'); return null; }
 
-    if (empty($password)) {
-        return null; // Password not configured in .env
-    }
-
-    // Login using the provider's API to get a new session key
-    $providerLoginUrl = 'https://theprovider.ntigskovde.se/login'; 
-    
-    $ch = curl_init($providerLoginUrl);
+    $ch = curl_init(PROVIDER_BASE_URL . '/login');
     curl_setopt_array($ch, [
-        CURLOPT_POST => true,
+        CURLOPT_POST           => true,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-        CURLOPT_POSTFIELDS => json_encode([
-            'username' => $username,
-            'password' => $password
-        ]),
-        CURLOPT_TIMEOUT => 5,
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS     => json_encode(['username' => $username, 'password' => $password]),
+        CURLOPT_TIMEOUT        => 5,
     ]);
-
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr  = curl_error($ch);
     curl_close($ch);
 
     if ($response === false || $httpCode !== 200) {
-        return null; // Provider login failed
+        error_log("GCSK: login failed user=$username http=$httpCode curl=$curlErr body=$response");
+        return null;
     }
 
-    $providerData = json_decode($response, true);
-    if (!is_array($providerData) || empty($providerData['session_key']) || !isset($providerData['user_id'])) {
-        return null; // Invalid response format or missing user_id
+    $data = json_decode($response, true);
+    if (!is_array($data) || empty($data['session_key']) || !isset($data['user_id'])) {
+        error_log('GCSK: bad provider response: ' . $response);
+        return null;
     }
 
-    $sessionKey     = $providerData['session_key'];
-    $providerUserId = (int)$providerData['user_id']; // ID ffrom proivder
-    
-    $expireDate = !empty($providerData['expires_at']) 
-        ? $providerData['expires_at'] 
-        : date('Y-m-d H:i:s', strtotime('+30 minutes'));
+    $expire = !empty($data['expires_at'])
+        ? $data['expires_at']
+        : date('Y-m-d H:i:s', strtotime('+' . PROVIDER_SESSION_MINUTES . ' minutes'));
 
-    $stmt = $conn->prepare("
-        INSERT INTO root_user (ID, token, expire_date) 
-        VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-            token = VALUES(token), 
-            expire_date = VALUES(expire_date)
-    ");
+    // 3. Store in that company's row. COALESCE keeps an ID that is already set.
+    run(
+        $conn,
+        'UPDATE root_user SET ID = ?, token = ?, expire_date = ? WHERE username = ?',
+        [(int)$data['user_id'], $data['session_key'], $expire, $username]
+    );
 
-    if ($stmt) {
-        $stmt->bind_param("iss", $providerUserId, $sessionKey, $expireDate);
-        $stmt->execute();
-        $stmt->close();
-    }
-
-    return $sessionKey;
+    return $data['session_key'];
 }

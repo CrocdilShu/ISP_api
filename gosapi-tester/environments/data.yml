@@ -2,5 +2,5 @@ name: data
 variables:
   - name: baseUrl
     value: https://bs2.ntigskovde.se/services/
-  - name: X-User-Token
-    value: 66b1528a12155e0c40ed55336ccafaf3d17f88798a38dbe9fd4f2c47adb67c5f
+  - name: X_User_Token
+    value: ba867b0da54b0c8f93307b6cce56a29a72cdd3857c059ea5d89202e51e8b58c4

@@ -25,6 +25,39 @@ if (!function_exists('respond')) {
     }
 }
 
+
+if (!function_exists('saveUploadedImage')) {
+    function saveUploadedImage(array $file): string {
+        $allowed = [
+            'image/jpeg' => 'jpg',
+            'image/png'  => 'png',
+            'image/gif'  => 'gif',
+            'image/webp' => 'webp',
+        ];
+
+        if ($file['size'] > 5 * 1024 * 1024) {
+            throw new Exception("Bilden är för stor (max 5 MB).");
+        }
+
+        $mime = detectMimeType($file['tmp_name']);
+        if (!isset($allowed[$mime])) {
+            throw new Exception("Ogiltig filtyp. Tillåtna: JPG, PNG, GIF, WEBP.");
+        }
+
+        $dir = dirname(__DIR__) . '/uploads/';
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new Exception("Kunde inte skapa uppladdningsmappen.");
+        }
+
+        $filename = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+        if (!move_uploaded_file($file['tmp_name'], $dir . $filename)) {
+            throw new Exception("Kunde inte spara bilden.");
+        }
+
+        return 'uploads/' . $filename;
+    }
+}
+
 if (!function_exists('respondError')) {
     function respondError(int $code, string $message): void {
         respond($code, ["status" => "error", "message" => $message]);

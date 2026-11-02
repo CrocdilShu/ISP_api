@@ -91,7 +91,6 @@ function getParticipants(mysqli $conn): void {
         'count'    => count($participants),
         'participants' => $participants
     ]);
-}
 
     //   Get participant from the event
     $rows = fetchAll(

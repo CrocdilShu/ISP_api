@@ -109,7 +109,6 @@ Hämtar användarprofiler eller innehåll skapat av användare (blogg, wiki, kal
 * `username` / `name`: Filtrera användare vars användarnamn börjar på angiven sträng.
 * `start_id`: Lägsta användar-ID att starta hämtningen från (för paginering).
 * `limit`: Maximalt antal användare som returneras (standard: 100).
-* `step`: Kliv/mönster vid hämtning (t.ex. `step=2` tar varannan användare).
 * `page_type`: Anger om skapat innehåll ska inkluderas. Giltiga värden: `blog`, `wiki`, `calendar`.
 * `title` / `titel`: Filtrera titlar på sidor/händelser som börjar med angiven sträng (när `page_type` används).
 

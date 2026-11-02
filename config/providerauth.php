@@ -22,14 +22,6 @@ function getRequestSessionKey(): ?string {
     if (!empty($_SERVER['HTTP_X_SESSION_KEY'])) {
         return trim($_SERVER['HTTP_X_SESSION_KEY']);
     }
-    
-    // Check standard Authorization Bearer header
-    if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
-        $authHeader = trim($_SERVER['HTTP_AUTHORIZATION']);
-        if (preg_match('/^Bearer\s+(.+)$/i', $authHeader, $matches)) {
-            return trim($matches[1]);
-        }
-    }
 
     // Fallback redirect authorization
     if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
@@ -218,20 +210,29 @@ function getCompanySessionKey(mysqli $conn): ?string {
     }
 
     $providerData = json_decode($response, true);
-    if (!is_array($providerData) || empty($providerData['session_key'])) {
-        return null; // Invalid response format
+    if (!is_array($providerData) || empty($providerData['session_key']) || !isset($providerData['user_id'])) {
+        return null; // Invalid response format or missing user_id
     }
 
-    $sessionKey = $providerData['session_key'];
+    $sessionKey     = $providerData['session_key'];
+    $providerUserId = (int)$providerData['user_id']; // ID ffrom proivder
+    
+    $expireDate = !empty($providerData['expires_at']) 
+        ? $providerData['expires_at'] 
+        : date('Y-m-d H:i:s', strtotime('+30 minutes'));
 
-    // Update the token and expiration date in the database for this specific company ID
-    $updateStmt = $conn->prepare(
-        "UPDATE root_user SET token = ?, expire_date = DATE_ADD(NOW(), INTERVAL 30 MINUTE) WHERE ID = ?"
-    );
-    if ($updateStmt) {
-        $updateStmt->bind_param("si", $sessionKey, $companyId);
-        $updateStmt->execute();
-        $updateStmt->close();
+    $stmt = $conn->prepare("
+        INSERT INTO root_user (ID, token, expire_date) 
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+            token = VALUES(token), 
+            expire_date = VALUES(expire_date)
+    ");
+
+    if ($stmt) {
+        $stmt->bind_param("iss", $providerUserId, $sessionKey, $expireDate);
+        $stmt->execute();
+        $stmt->close();
     }
 
     return $sessionKey;

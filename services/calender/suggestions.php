@@ -51,11 +51,54 @@ function loadSuggestion(mysqli $conn, int $suggestionId): array {
 // GET getSuggestions  ?event_id=1  (or ?title=...&creator_email=...)
 // oldest first
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// GET getSuggestions  ?event_id=1  (or ?title=...&creator_email=...)
+// oldest first
+// ---------------------------------------------------------------
 function getSuggestions(mysqli $conn): void {
     requireMethod('GET');
 
-    // Automatically resolves event ID from query parameters (supports title & email lookup)
-    $eventId = resolveEventId($conn, $_GET);
+    $eventId      = (int)($_GET['event_id'] ?? 0);
+    $titlePrefix  = trim((string)($_GET['title'] ?? $_GET['titel'] ?? ''));
+    $creatorEmail = trim((string)($_GET['creator_email'] ?? ''));
+
+    // Om event_id saknas men titel eller creator_email anges, leta upp eventet först
+    if ($eventId <= 0 && ($titlePrefix !== '' || $creatorEmail !== '')) {
+        $sqlEvent = 'SELECT e.ID 
+            FROM calender_event e 
+            JOIN page pg ON pg.ID = e.ID 
+            LEFT JOIN user o ON o.ID = pg.FORuser 
+            WHERE 1 = 1';
+        $paramsEvent = [];
+
+        if ($creatorEmail !== '') {
+            $sqlEvent .= ' AND o.email = ?';
+            $paramsEvent[] = $creatorEmail;
+        }
+
+        if ($titlePrefix !== '') {
+            $sqlEvent .= ' AND pg.titel LIKE ?';
+            $paramsEvent[] = $titlePrefix . '%';
+        }
+
+        $sqlEvent .= ' LIMIT 1';
+
+        $eventRow = fetchOne($conn, $sqlEvent, $paramsEvent);
+        if ($eventRow) {
+            $eventId = (int)$eventRow['ID'];
+        } else {
+            respond(404, ['error' => 'Event not found matching title and/or creator email']);
+        }
+    }
+
+    // Fallback till event-resolver om den finns tillgänglig
+    if ($eventId <= 0 && function_exists('resolveEventId')) {
+        $eventId = resolveEventId($conn, $_GET);
+    }
+
+    if ($eventId <= 0) {
+        respond(400, ['error' => 'event_id, title, or creator_email is required to identify the event']);
+    }
 
     $rows = fetchAll($conn,
         'SELECT c.ID AS suggestion_id, c.content, c.created_at, c.last_update,

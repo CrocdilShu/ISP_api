@@ -1,0 +1,30 @@
+meta {
+  name: Delete comment - not allowed (403)
+  type: http
+  seq: 8
+}
+
+delete {
+  url: {{baseUrl}}?action=deleteComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: deleteComment
+}
+
+headers {
+  X-User-Token: {{token2}}
+}
+
+body:json {
+  {
+    "comment_id": "{{commentId}}"
+  }
+}
+
+assert {
+  res.status: eq 403
+  res.body.status: eq error
+}

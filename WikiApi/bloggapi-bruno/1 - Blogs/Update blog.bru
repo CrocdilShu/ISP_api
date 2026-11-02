@@ -1,0 +1,33 @@
+meta {
+  name: Update blog
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}?action=updateBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": "{{blogId}}",
+    "titel": "{{blogTitle}} (edited)",
+    "description": "Updated from Bruno",
+    "visibility": "public"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

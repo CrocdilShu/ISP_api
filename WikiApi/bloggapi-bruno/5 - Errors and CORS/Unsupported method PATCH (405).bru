@@ -1,0 +1,24 @@
+meta {
+  name: Unsupported method PATCH (405)
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {}
+}
+
+assert {
+  res.status: eq 405
+  res.body.status: eq error
+}

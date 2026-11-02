@@ -1,0 +1,21 @@
+meta {
+  name: Get posts by blog_id
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}?blog_id={{blogId}}
+  body: none
+  auth: none
+}
+
+params:query {
+  blog_id: {{blogId}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+  res.body.data: isArray
+}

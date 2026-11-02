@@ -1,0 +1,20 @@
+meta {
+  name: Get post by title
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}?title={{postTitle}}
+  body: none
+  auth: none
+}
+
+params:query {
+  title: {{postTitle}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

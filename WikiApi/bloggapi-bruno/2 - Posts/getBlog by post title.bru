@@ -1,0 +1,21 @@
+meta {
+  name: getBlog by post title
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}?action=getBlog&title={{postTitle}}
+  body: none
+  auth: none
+}
+
+params:query {
+  action: getBlog
+  title: {{postTitle}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

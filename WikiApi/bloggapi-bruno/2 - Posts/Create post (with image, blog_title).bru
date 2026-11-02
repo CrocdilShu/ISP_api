@@ -1,0 +1,41 @@
+meta {
+  name: Create post (with image, blog_title)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}?action=createPost
+  body: multipartForm
+  auth: none
+}
+
+params:query {
+  action: createPost
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:multipart-form {
+  blog_title: {{blogTitle}} (edited)
+  titel: {{imagePostTitle}}
+  content: {"text":"Post with picture"}
+  visibility: public
+  picture: @file(assets/test.png)
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+  res.body.page_id: isNumber
+}
+
+script:pre-request {
+  bru.setVar("imagePostTitle", "Bruno Image Post " + Date.now());
+}
+
+script:post-response {
+  if (res.body && res.body.page_id) bru.setVar("imagePageId", res.body.page_id);
+}

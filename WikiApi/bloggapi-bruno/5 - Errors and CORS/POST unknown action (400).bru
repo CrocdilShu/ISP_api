@@ -1,0 +1,28 @@
+meta {
+  name: POST unknown action (400)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}?action=doesNotExist
+  body: json
+  auth: none
+}
+
+params:query {
+  action: doesNotExist
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {}
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

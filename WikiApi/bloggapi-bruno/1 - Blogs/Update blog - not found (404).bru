@@ -1,0 +1,32 @@
+meta {
+  name: Update blog - not found (404)
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}?action=updateBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": 999999,
+    "titel": "Ghost",
+    "description": "x"
+  }
+}
+
+assert {
+  res.status: eq 404
+  res.body.status: eq error
+}

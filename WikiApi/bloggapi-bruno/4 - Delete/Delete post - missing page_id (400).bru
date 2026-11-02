@@ -1,0 +1,24 @@
+meta {
+  name: Delete post - missing page_id (400)
+  type: http
+  seq: 1
+}
+
+delete {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {}
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

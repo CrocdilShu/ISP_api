@@ -1,0 +1,30 @@
+meta {
+  name: Create blog - invalid token (401)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}?action=createBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: createBlog
+}
+
+headers {
+  X-User-Token: not-a-real-token
+}
+
+body:json {
+  {
+    "titel": "Bad token blog"
+  }
+}
+
+assert {
+  res.status: eq 401
+  res.body.status: eq error
+}

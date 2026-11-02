@@ -1,0 +1,26 @@
+meta {
+  name: Create blog - no token (401)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}?action=createBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: createBlog
+}
+
+body:json {
+  {
+    "titel": "Anon blog"
+  }
+}
+
+assert {
+  res.status: eq 401
+  res.body.status: eq error
+}

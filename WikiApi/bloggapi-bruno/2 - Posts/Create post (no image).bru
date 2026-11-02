@@ -1,0 +1,40 @@
+meta {
+  name: Create post (no image)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}?action=createPost
+  body: multipartForm
+  auth: none
+}
+
+params:query {
+  action: createPost
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:multipart-form {
+  blog_id: {{blogId}}
+  titel: {{postTitle}}
+  content: {"text":"Hello from Bruno"}
+  visibility: public
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+  res.body.page_id: isNumber
+}
+
+script:pre-request {
+  bru.setVar("postTitle", "Bruno Post " + Date.now());
+}
+
+script:post-response {
+  if (res.body && res.body.page_id) bru.setVar("pageId", res.body.page_id);
+}

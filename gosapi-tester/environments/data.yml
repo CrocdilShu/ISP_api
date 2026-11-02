@@ -1,6 +1,6 @@
 name: data
 variables:
   - name: baseUrl
-    value: https://gosapi.ddev.site
+    value: https://bs2.ntigskovde.se/services/
   - name: X-User-Token
-    value: 2ae68666d658c8ffbe3b2ce8c452b72746992a41d31044f9419f2c3fca86a551
+    value: 66b1528a12155e0c40ed55336ccafaf3d17f88798a38dbe9fd4f2c47adb67c5f

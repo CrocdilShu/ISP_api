@@ -9,7 +9,8 @@ require_once __DIR__ . '/../helpers.php';
 
 // ---------------------------------------------------------------
 // POST addCompany
-// Adds a new company with a username and a securely hashed password.
+// Adds a new company/root_user with a username and a securely hashed password.
+// ID is left empty/NULL here and synchronized via Provider verification later.
 // ---------------------------------------------------------------
 function addCompany(mysqli $conn): void {
     requireMethod('POST');
@@ -22,8 +23,8 @@ function addCompany(mysqli $conn): void {
         respond(400, ['error' => 'Username and password are required']);
     }
 
-    // Check if company/username already exists
-    $existing = fetchOne($conn, 'SELECT ID FROM company WHERE username = ?', [$username]);
+    // Check if user/username already exists in root_user
+    $existing = fetchOne($conn, 'SELECT ID FROM root_user WHERE username = ?', [$username]);
     if ($existing) {
         respond(409, ['error' => 'Company with this username already exists']);
     }
@@ -31,22 +32,22 @@ function addCompany(mysqli $conn): void {
     // Hash the password securely before storing
     $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
-    $stmt = $conn->prepare('INSERT INTO company (username, password) VALUES (?, ?)');
+    // Insert into root_user without explicit ID (ID gets set/synced upon provider login)
+    $stmt = $conn->prepare('INSERT INTO root_user (username, password) VALUES (?, ?)');
     $stmt->bind_param('ss', $username, $hashedPassword);
     $stmt->execute();
-    $companyId = $stmt->insert_id;
     $stmt->close();
 
     respond(201, [
-        'success' => true,
-        'company_id' => $companyId,
-        'username' => $username
+        'success'  => true,
+        'username' => $username,
+        'message'  => 'Company added successfully. Provider ID will be synced upon verification.'
     ]);
 }
 
 // ---------------------------------------------------------------
 // PUT / POST editCompany
-// Edits an existing company's username and/or password.
+// Edits an existing root_user's username and/or password.
 // ---------------------------------------------------------------
 function editCompany(mysqli $conn): void {
     requireMethod('PUT', 'POST');
@@ -60,8 +61,8 @@ function editCompany(mysqli $conn): void {
         respond(400, ['error' => 'Valid company_id or id is required']);
     }
 
-    // Verify company exists
-    $company = fetchOne($conn, 'SELECT ID FROM company WHERE ID = ?', [$companyId]);
+    // Verify company/root_user exists
+    $company = fetchOne($conn, 'SELECT ID FROM root_user WHERE ID = ?', [$companyId]);
     if (!$company) {
         respond(404, ['error' => 'Company not found']);
     }
@@ -72,7 +73,7 @@ function editCompany(mysqli $conn): void {
 
     if ($username !== '') {
         // Check uniqueness if username is changing
-        $existing = fetchOne($conn, 'SELECT ID FROM company WHERE username = ? AND ID != ?', [$username, $companyId]);
+        $existing = fetchOne($conn, 'SELECT ID FROM root_user WHERE username = ? AND ID != ?', [$username, $companyId]);
         if ($existing) {
             respond(409, ['error' => 'Username is already taken by another company']);
         }
@@ -96,22 +97,22 @@ function editCompany(mysqli $conn): void {
     $params[] = $companyId;
     $types .= 'i';
 
-    $sql = 'UPDATE company SET ' . implode(', ', $updates) . ' WHERE ID = ?';
+    $sql = 'UPDATE root_user SET ' . implode(', ', $updates) . ' WHERE ID = ?';
     $stmt = $conn->prepare($sql);
     $stmt->bind_param($types, ...$params);
     $stmt->execute();
     $stmt->close();
 
     respond(200, [
-        'success' => true,
+        'success'    => true,
         'company_id' => $companyId,
-        'message' => 'Company updated successfully'
+        'message'    => 'Company updated successfully'
     ]);
 }
 
 // ---------------------------------------------------------------
 // POST changeCompany
-// Changes the active COMPANY_ID globally by looking up the username.
+// Changes the active COMPANY_ID globally by looking up the username in root_user.
 // ---------------------------------------------------------------
 function changeCompany(mysqli $conn): void {
     requireMethod('POST');
@@ -123,15 +124,15 @@ function changeCompany(mysqli $conn): void {
         respond(400, ['error' => 'Username is required to change company']);
     }
 
-    // Find company based on username
-    $company = fetchOne($conn, 'SELECT ID, username FROM company WHERE username = ?', [$username]);
+    // Find company based on username in root_user
+    $company = fetchOne($conn, 'SELECT ID, username FROM root_user WHERE username = ?', [$username]);
     if (!$company) {
         respond(404, ['error' => 'Company not found for the given username']);
     }
 
     $companyId = (int)$company['ID'];
 
-    // Svae the new ID in the json
+    // Save the new ID in the json
     $configFile = __DIR__ . '/../../config/current_company.json';
     $configData = [
         'company_id' => $companyId,

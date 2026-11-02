@@ -1,0 +1,30 @@
+meta {
+  name: Delete blog - missing id (400)
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}?action=deleteBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: deleteBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": 0
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

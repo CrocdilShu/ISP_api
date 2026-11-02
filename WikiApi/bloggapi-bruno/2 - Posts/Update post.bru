@@ -1,0 +1,30 @@
+meta {
+  name: Update post
+  type: http
+  seq: 11
+}
+
+put {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "page_id": "{{pageId}}",
+    "titel": "{{postTitle}} (edited)",
+    "content": {
+      "text": "Edited from Bruno"
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

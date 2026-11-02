@@ -1,0 +1,31 @@
+meta {
+  name: Update blog - missing fields (400)
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}?action=updateBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": 0,
+    "titel": ""
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

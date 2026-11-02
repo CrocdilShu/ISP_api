@@ -1,0 +1,31 @@
+meta {
+  name: Add comment - missing text (400)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}?action=addComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: addComment
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "page_id": "{{pageId}}",
+    "comment": ""
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

@@ -1,0 +1,26 @@
+meta {
+  name: Update post - missing page_id (400)
+  type: http
+  seq: 12
+}
+
+put {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "titel": "No id"
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

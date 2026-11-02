@@ -1,0 +1,20 @@
+meta {
+  name: List all posts
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

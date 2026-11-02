@@ -1,0 +1,31 @@
+meta {
+  name: Update comment - missing fields (400)
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}?action=updateComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateComment
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "comment_id": 0,
+    "comment": ""
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

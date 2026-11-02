@@ -1,0 +1,31 @@
+meta {
+  name: Create post - invalid file type (400)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}?action=createPost
+  body: multipartForm
+  auth: none
+}
+
+params:query {
+  action: createPost
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:multipart-form {
+  blog_id: {{blogId}}
+  titel: Bad upload
+  content: {"text":"x"}
+  picture: @file(assets/not-an-image.txt)
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

@@ -1,0 +1,31 @@
+meta {
+  name: Add comment (by titel)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}?action=addComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: addComment
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "titel": "{{postTitle}} (edited)",
+    "comment": "Second comment, found via title"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

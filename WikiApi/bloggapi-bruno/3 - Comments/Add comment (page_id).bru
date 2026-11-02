@@ -1,0 +1,36 @@
+meta {
+  name: Add comment (page_id)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}?action=addComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: addComment
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "page_id": "{{pageId}}",
+    "comment": "First comment from Bruno"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+  res.body.comment_id: isNumber
+}
+
+script:post-response {
+  if (res.body && res.body.comment_id) bru.setVar("commentId", res.body.comment_id);
+}

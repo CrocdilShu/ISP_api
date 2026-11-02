@@ -1,0 +1,26 @@
+meta {
+  name: Delete post - not owner (403)
+  type: http
+  seq: 2
+}
+
+delete {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token2}}
+}
+
+body:json {
+  {
+    "page_id": "{{pageId}}"
+  }
+}
+
+assert {
+  res.status: eq 403
+  res.body.status: eq error
+}

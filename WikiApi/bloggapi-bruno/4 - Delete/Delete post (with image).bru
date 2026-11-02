@@ -1,0 +1,26 @@
+meta {
+  name: Delete post (with image)
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "page_id": "{{imagePageId}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

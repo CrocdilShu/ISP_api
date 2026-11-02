@@ -1,0 +1,31 @@
+meta {
+  name: Create blog - missing title (400)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}?action=createBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: createBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "titel": "",
+    "description": "No title"
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.status: eq error
+}

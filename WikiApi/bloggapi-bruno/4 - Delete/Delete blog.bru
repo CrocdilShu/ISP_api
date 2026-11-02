@@ -1,0 +1,30 @@
+meta {
+  name: Delete blog
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}?action=deleteBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: deleteBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": "{{blogId}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

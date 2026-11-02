@@ -1,0 +1,31 @@
+meta {
+  name: Update comment - not allowed (403)
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}?action=updateComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateComment
+}
+
+headers {
+  X-User-Token: {{token2}}
+}
+
+body:json {
+  {
+    "comment_id": "{{commentId}}",
+    "comment": "Hijack"
+  }
+}
+
+assert {
+  res.status: eq 403
+  res.body.status: eq error
+}

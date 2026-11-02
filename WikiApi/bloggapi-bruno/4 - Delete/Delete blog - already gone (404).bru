@@ -1,0 +1,30 @@
+meta {
+  name: Delete blog - already gone (404)
+  type: http
+  seq: 8
+}
+
+delete {
+  url: {{baseUrl}}?action=deleteBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: deleteBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "blog_id": "{{blogId}}"
+  }
+}
+
+assert {
+  res.status: eq 404
+  res.body.status: eq error
+}

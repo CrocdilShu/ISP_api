@@ -1,0 +1,21 @@
+meta {
+  name: Get post with comment limit
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}?id={{pageId}}&limit=1
+  body: none
+  auth: none
+}
+
+params:query {
+  id: {{pageId}}
+  limit: 1
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

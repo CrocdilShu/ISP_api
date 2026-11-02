@@ -1,0 +1,15 @@
+meta {
+  name: CORS preflight (OPTIONS)
+  type: http
+  seq: 5
+}
+
+options {
+  url: {{baseUrl}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

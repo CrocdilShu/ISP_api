@@ -1,0 +1,31 @@
+meta {
+  name: Update comment
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}?action=updateComment
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateComment
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "comment_id": "{{commentId}}",
+    "comment": "Edited comment"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+}

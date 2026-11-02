@@ -1,0 +1,32 @@
+meta {
+  name: Update blog - not owner (403)
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}?action=updateBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: updateBlog
+}
+
+headers {
+  X-User-Token: {{token2}}
+}
+
+body:json {
+  {
+    "blog_id": "{{blogId}}",
+    "titel": "Hijack",
+    "description": "x"
+  }
+}
+
+assert {
+  res.status: eq 403
+  res.body.status: eq error
+}

@@ -1,0 +1,41 @@
+meta {
+  name: Create blog
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}?action=createBlog
+  body: json
+  auth: none
+}
+
+params:query {
+  action: createBlog
+}
+
+headers {
+  X-User-Token: {{token}}
+}
+
+body:json {
+  {
+    "titel": "{{blogTitle}}",
+    "description": "Created from Bruno",
+    "visibility": "public"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq success
+  res.body.blog_id: isNumber
+}
+
+script:pre-request {
+  bru.setVar("blogTitle", "Bruno Blog " + Date.now());
+}
+
+script:post-response {
+  if (res.body && res.body.blog_id) bru.setVar("blogId", res.body.blog_id);
+}

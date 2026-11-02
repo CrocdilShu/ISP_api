@@ -9,9 +9,15 @@ if (!defined('CALENDER_API')) {
 
 // ---------------------------------------------------------------
 // POST getEvents
-// optional: ?from=...&to=...  (Y-m-d H:i:s)
-//           ?user_id=5         (only events that employee takes part in)
-// returns ALL events of the company unless user_id is given.
+// {
+//      "from": "Y-m-d H:i:s",      (optional, filters events starting/active from this date)
+//      "to": "Y-m-d H:i:s",        (optional, filters events up to this date)
+//      "user_id": 5,               (optional, only events that this user takes part in)
+//      "email": "user@test.com",   (optional, alternative to user_id to look up user events by email)
+//      "start_id": 0,              (optional, minimum event ID to start from, defaults to 0)
+//      "limit": 100                (optional, maximum number of events to return, defaults to 100)
+// }
+// returns JSON with metadata (start_id, limit, count) and a list of events.
 // Repeating events are returned ONCE (first occurrence + rule),
 // the client expands the repeats.
 // ---------------------------------------------------------------
@@ -21,9 +27,27 @@ function getEvents(mysqli $conn): void {
     // Läs JSON-data från request body
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
-    $userId = $input['user_id'] ?? null;
-    $from   = $input['from'] ?? null;
-    $to     = $input['to'] ?? null;
+    $userId = (int)($input['user_id'] ?? 0);
+    $email  = trim((string)($input['email'] ?? ''));
+
+    // Resolve user_id via email parameter if user_id was not provided
+    if ($userId <= 0 && $email !== '') {
+        $userRow = fetchOne($conn, 'SELECT ID FROM user WHERE email = ?', [$email]);
+        if ($userRow) {
+            $userId = (int)$userRow['ID'];
+        } else {
+            respond(404, ['error' => 'User not found by email']);
+        }
+    }
+
+    $from    = $input['from'] ?? null;
+    $to      = $input['to'] ?? null;
+    $startId = (int)($input['start_id'] ?? 0);
+    $limit   = (int)($input['limit'] ?? 100);
+
+    if ($limit <= 0) {
+        $limit = 100;
+    }
 
     $sql = 'SELECT e.ID, e.start_time, e.end_time, e.created_at, e.FORrecurrence,
                 pg.titel AS title, pg.content,
@@ -33,13 +57,13 @@ function getEvents(mysqli $conn): void {
             JOIN page pg ON pg.ID = e.ID
             LEFT JOIN user o ON o.ID = pg.FORuser
             LEFT JOIN recurrence r ON r.ID = e.FORrecurrence
-            WHERE 1 = 1';
-    $params = [];
+            WHERE e.ID >= ?';
+    $params = [$startId];
 
-    if (!empty($userId)) {
+    if ($userId > 0) {
         $sql .= ' AND EXISTS (SELECT 1 FROM participant p
             WHERE p.FORcalender_event = e.ID AND p.FORuser = ?)';
-        $params[] = (int)$userId;
+        $params[] = $userId;
     }
     if (!empty($from) && validDate($from)) {
         // repeating events stay relevant until their rule ends
@@ -51,7 +75,9 @@ function getEvents(mysqli $conn): void {
         $sql .= ' AND e.start_time <= ?';
         $params[] = $to;
     }
-    $sql .= ' ORDER BY e.start_time ASC';
+
+    $sql .= ' ORDER BY e.ID ASC LIMIT ?';
+    $params[] = $limit;
 
     $events = fetchAll($conn, $sql, $params);
     foreach ($events as &$ev) {
@@ -60,7 +86,12 @@ function getEvents(mysqli $conn): void {
     }
     unset($ev);
 
-    respond(200, ['events' => $events]);
+    respond(200, [
+        'start_id' => $startId,
+        'limit'    => $limit,
+        'count'    => count($events),
+        'events'   => $events
+    ]);
 }
 
 // ---------------------------------------------------------------

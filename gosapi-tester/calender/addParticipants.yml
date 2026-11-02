@@ -5,11 +5,14 @@ info:
 
 http:
   method: POST
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=addParticipant"
   params:
     - name: action
-      value: ""
+      value: addParticipant
       type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

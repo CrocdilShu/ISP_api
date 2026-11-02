@@ -1,7 +1,7 @@
 info:
   name: loginRegUser
   type: http
-  seq: 7
+  seq: 6
 
 http:
   method: POST
@@ -14,7 +14,7 @@ http:
     type: json
     data: |-
       {
-        "email": "testuser1@company.com", 
+        "email": "testuser105@example.com", 
         "password": "**test**"
       }
 

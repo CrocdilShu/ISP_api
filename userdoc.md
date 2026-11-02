@@ -33,7 +33,6 @@ Systemet tillämpar tre behörighetsnivåer:
 ## Översikt över Actions
 
 1. [Autentisering & Sessioner](#1-autentisering--sessioner)
-   * [`rootLogin`](#rootlogin)
    * [`loginUser`](#loginuser)
    * [`logoutUser`](#logoutuser)
 2. [Användarhantering](#2-användarhantering)
@@ -45,35 +44,6 @@ Systemet tillämpar tre behörighetsnivåer:
 ---
 
 ## 1. Autentisering & Sessioner
-
-### `rootLogin`
-
-Autentiserar företags-/rotkontot mot den externa leverantören och sparar en företagssession (`session_key`) lokalt.
-
-* **Metod:** `POST`
-* **Query Parameter:** `action=rootLogin`
-* **Inloggningstyp:** Kräver inga tidigare headers.
-
-#### Request Body
-```json
-{
-  "username": "preseeded_admin",
-  "password": "mitt_root_lösenord"
-}
-```
-
-#### Svar (200 OK)
-```json
-{
-  "success": true,
-  "user_id": 1,
-  "session_key": "prov_sess_abc123xyz...",
-  "services": 7,
-  "expires_at": "2026-10-23 11:04:00"
-}
-```
-
----
 
 ### `loginUser`
 
@@ -139,7 +109,6 @@ Hämtar användarprofiler eller innehåll skapat av användare (blogg, wiki, kal
 * `username` / `name`: Filtrera användare vars användarnamn börjar på angiven sträng.
 * `start_id`: Lägsta användar-ID att starta hämtningen från (för paginering).
 * `limit`: Maximalt antal användare som returneras (standard: 100).
-* `step`: Kliv/mönster vid hämtning (t.ex. `step=2` tar varannan användare).
 * `page_type`: Anger om skapat innehåll ska inkluderas. Giltiga värden: `blog`, `wiki`, `calendar`.
 * `title` / `titel`: Filtrera titlar på sidor/händelser som börjar med angiven sträng (när `page_type` används).
 

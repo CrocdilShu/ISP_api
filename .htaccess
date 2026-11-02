@@ -1,0 +1,15 @@
+# Aktivera URL-omskrivning
+RewriteEngine On
+
+# 1. Skicka med Authorization-headern till PHP 
+# (Viktigt eftersom er kod läser av Bearer-tokens via $_SERVER['HTTP_AUTHORIZATION'])
+RewriteCond %{HTTP:Authorization} ^(.+)$
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# 2. Förhindra att folk kan titta på filmappar (Directory listing)
+Options -Indexes
+
+# 3. Skydda känsliga filer (stäng ute webbläsaren från att nå .env)
+<FilesMatch "^\.env">
+    Require all denied
+</FilesMatch>

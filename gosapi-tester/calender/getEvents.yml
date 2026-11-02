@@ -4,12 +4,20 @@ info:
   seq: 2
 
 http:
-  method: GET
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  method: POST
+  url: "{{baseUrl}}calender/calender.php?action=getEvents"
   params:
     - name: action
-      value: ""
+      value: getEvents
       type: query
+  body:
+    type: json
+    data: |-
+      {
+        "id": 2500,
+        "from": "2026-11-01 00:00:00",
+        "to": "2026-11-31 23:59:59"
+      }
   auth: inherit
 
 settings:

@@ -426,3 +426,11 @@ function uploadProfilePicture(array $file, ?string $old_pfp_path = null): string
     // Return the relative path to store in the database
     return 'img/' . $filename;
 }
+
+function requireRootAdmin(mysqli $conn): array {
+    $acting = actingUserRow($conn, true); // Needs an inlogged account
+    if ($acting['role_name'] !== 'root_admin') {
+        respond(403, ['error' => 'Only root_admin can perform this action']);
+    }
+    return $acting;
+}

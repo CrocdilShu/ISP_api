@@ -5,7 +5,17 @@ info:
 
 http:
   method: DELETE
-  url: ""
+  url: "{{baseUrl}}user/user.php?action=deleteUser"
+  params:
+    - name: action
+      value: deleteUser
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "email": "testuser500@gmail.com"
+      }
   auth: inherit
 
 settings:

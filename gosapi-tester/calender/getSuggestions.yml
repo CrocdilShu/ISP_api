@@ -5,11 +5,17 @@ info:
 
 http:
   method: GET
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=getSuggestions&event_id=12"
   params:
     - name: action
-      value: ""
+      value: getSuggestions
       type: query
+    - name: event_id
+      value: "12"
+      type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

@@ -4,8 +4,18 @@ info:
   seq: 1
 
 http:
-  method: GET
-  url: ""
+  method: POST
+  url: "{{baseUrl}}calender/calender.php?action=getParticipants"
+  params:
+    - name: action
+      value: getParticipants
+      type: query
+  body:
+    type: json
+    data: |-
+      {
+        "title":""
+      }
   auth: inherit
 
 settings:

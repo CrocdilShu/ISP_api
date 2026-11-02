@@ -5,11 +5,14 @@ info:
 
 http:
   method: PUT
-  url: https://gosapi.ddev.site:8443/services/calender.php?action=
+  url: "{{baseUrl}}calender/calender.php?action=editSuggestion"
   params:
     - name: action
-      value: ""
+      value: editSuggestion
       type: query
+  body:
+    type: json
+    data: ""
   auth: inherit
 
 settings:

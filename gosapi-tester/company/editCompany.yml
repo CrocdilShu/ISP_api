@@ -1,10 +1,10 @@
 info:
-  name: deleteEvent
+  name: editCompany
   type: http
-  seq: 11
+  seq: 2
 
 http:
-  method: DELETE
+  method: POST
   url: ""
   auth: inherit
 

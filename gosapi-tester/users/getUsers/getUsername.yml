@@ -5,13 +5,19 @@ info:
 
 http:
   method: GET
-  url: "{{baseUrl}}user/user.php?action=getUser&username=user_2"
+  url: "{{baseUrl}}user/user.php?action=getUser&username=test&limit=20&step=2"
   params:
     - name: action
       value: getUser
       type: query
     - name: username
-      value: user_2
+      value: test
+      type: query
+    - name: limit
+      value: "20"
+      type: query
+    - name: step
+      value: "2"
       type: query
   auth: inherit
 

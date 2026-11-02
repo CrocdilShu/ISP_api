@@ -8,7 +8,7 @@ require_once __DIR__ . '/../../config/providerauth.php';
 require_once __DIR__ . '/../helpers.php';
 
 // User files that contains the funcs
-require_once __DIR__ . '/userfuncs.php';
+require_once __DIR__ . '/../user/userfuncs.php';
 require_once __DIR__ . '/companyfuncs.php';
 
 header('Content-Type: application/json; charset=utf-8');
